@@ -1,0 +1,124 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Stores user-specific profile data.",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "The unique ID of the user." },
+        "email": { "type": "string", "format": "email", "description": "The user's email address." },
+        "name": { "type": "string", "description": "The user's display name." },
+        "photoURL": { "type": "string", "format": "uri", "description": "The user's profile photo URL." },
+        "fcmToken": { "type": "string", "description": "The user's Firebase Cloud Messaging token for push notifications." },
+        "remindOnDay": { "type": "boolean", "description": "Whether to remind on the day of the birthday." },
+        "remind1DayBefore": { "type": "boolean", "description": "Whether to remind 1 day before the birthday." },
+        "remind3DaysBefore": { "type": "boolean", "description": "Whether to remind 3 days before the birthday." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the profile was created." }
+      },
+      "required": ["uid", "email"]
+    },
+    "Person": {
+      "title": "Birthday Entry",
+      "description": "A single person's birthday information.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The person's name." },
+        "dob": { "type": "string", "format": "date", "description": "Date of birth (YYYY-MM-DD)." },
+        "avatar": { "type": "string", "description": "Initials or avatar identifier." },
+        "phone": { "type": "string", "description": "Phone number for wishes." },
+        "relationship": { "type": "string", "description": "The relationship persona (e.g. Mentor, Sibling) for AI calibration." },
+        "interests": { "type": "array", "items": { "type": "string" }, "description": "List of interests for AI gift ideas." },
+        "notes": { "type": "string", "description": "Personal notes about the person." },
+        "isFavorite": { "type": "boolean", "description": "Mark as favorite for special highlights." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the entry was created." },
+        "createdBy": { "type": "string", "description": "UID of the user who added this birthday." }
+      },
+      "required": ["name", "dob"]
+    },
+    "Group": {
+      "title": "Shared Group",
+      "description": "A group shared between multiple users.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "The name of the group." },
+        "giftPlanner": { 
+          "type": "array", 
+          "items": { 
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "item": { "type": "string" },
+              "cost": { "type": "number" },
+              "pledgedBy": { "type": "string", "description": "User UID" },
+              "status": { "type": "string", "enum": ["suggested", "bought", "delivered"] }
+            }
+          },
+          "description": "Collaborative gift planning for the group."
+        },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the group was created." },
+        "ownerId": { "type": "string", "description": "UID of the user who created the group." }
+      },
+      "required": ["name", "ownerId"]
+    },
+    "Member": {
+      "title": "Group Member",
+      "description": "A user's role within a group.",
+      "type": "object",
+      "properties": {
+        "role": { "type": "string", "enum": ["admin", "viewer"], "description": "The user's role in the group." },
+        "email": { "type": "string", "description": "The user's email." },
+        "name": { "type": "string", "description": "The user's name." },
+        "joinedAt": { "type": "string", "format": "date-time", "description": "When the user joined the group." }
+      },
+      "required": ["role"]
+    },
+    "Invite": {
+      "title": "Group Invite",
+      "description": "A token-based invite to a group.",
+      "type": "object",
+      "properties": {
+        "groupId": { "type": "string", "description": "The ID of the group to join." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the invite was created." },
+        "createdBy": { "type": "string", "description": "UID of the user who created the invite." }
+      },
+      "required": ["groupId", "createdAt", "createdBy"]
+    },
+    "WishTemplate": {
+      "title": "Wish Template",
+      "description": "A pre-defined birthday wish message template.",
+      "type": "object",
+      "properties": {
+        "title": { "type": "string", "description": "Short title for the template." },
+        "content": { "type": "string", "description": "The message content. Use {name} as a placeholder." },
+        "createdAt": { "type": "string", "format": "date-time", "description": "When the template was created." }
+      },
+      "required": ["title", "content"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": "UserProfile",
+      "description": "User profile document."
+    },
+    "/users/{uid}/templates/{templateId}": {
+      "schema": "WishTemplate",
+      "description": "User's custom wish templates."
+    },
+    "/groups/{groupId}": {
+      "schema": "Group",
+      "description": "Top-level collection for shared groups."
+    },
+    "/groups/{groupId}/members/{uid}": {
+      "schema": "Member",
+      "description": "Members and their roles within a group."
+    },
+    "/groups/{groupId}/birthdays/{birthdayId}": {
+      "schema": "Person",
+      "description": "Birthdays associated with a specific group."
+    },
+    "/invites/{token}": {
+      "schema": "Invite",
+      "description": "Tokens for joining groups."
+    }
+  }
+}
