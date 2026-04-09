@@ -25,15 +25,12 @@ async function initFirebaseAdmin() {
     
     if (fs.existsSync(configPath)) {
       config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    } else {
-      console.warn("firebase-applet-config.json not found. Using environment variables if available.");
-      config = {
-        projectId: process.env.FIREBASE_PROJECT_ID,
-        firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID
-      };
     }
+
+    const projectId = process.env.FIREBASE_PROJECT_ID || config.projectId;
+    const databaseId = process.env.FIREBASE_DATABASE_ID || config.firestoreDatabaseId;
     
-    if (!config.projectId && !process.env.FIREBASE_PROJECT_ID) {
+    if (!projectId) {
       console.error("No Firebase Project ID found. Admin SDK will not be initialized.");
       return;
     }
@@ -58,16 +55,14 @@ async function initFirebaseAdmin() {
         });
       } else {
         console.warn("FIREBASE_SERVICE_ACCOUNT provided but could not be parsed. Falling back to project ID.");
-        admin.initializeApp({ projectId: config.projectId || process.env.FIREBASE_PROJECT_ID });
+        admin.initializeApp({ projectId });
       }
     } else {
       // Fallback for local/dev or if Vercel has default credentials
-      admin.initializeApp({
-        projectId: config.projectId || process.env.FIREBASE_PROJECT_ID
-      });
+      admin.initializeApp({ projectId });
     }
     
-    db = admin.firestore(config.firestoreDatabaseId || process.env.FIREBASE_DATABASE_ID);
+    db = admin.firestore(databaseId);
     messaging = admin.messaging();
     console.log("Firebase Admin initialized successfully.");
   } catch (error) {

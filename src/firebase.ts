@@ -4,24 +4,38 @@ import { getFirestore, doc, getDocFromServer } from 'firebase/firestore';
 import { getMessaging, isSupported } from 'firebase/messaging';
 import { getStorage } from 'firebase/storage';
 
-// Default configuration for development
-const defaultFirebaseConfig = {
-  apiKey: "AIzaSyA-PLACEHOLDER",
-  authDomain: "birthday-premium.firebaseapp.com",
-  projectId: "birthday-premium",
-  storageBucket: "birthday-premium.appspot.com",
-  messagingSenderId: "123456789",
-  appId: "1:123456789:web:abcdef123456"
+// Firebase configuration prioritizing environment variables
+const firebaseConfig = {
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  firestoreDatabaseId: import.meta.env.VITE_FIREBASE_DATABASE_ID,
 };
 
-// Try to load the config file
-// @ts-ignore
-const configs = import.meta.glob('../firebase-applet-config.json', { eager: true });
-const firebaseConfig = (configs['../firebase-applet-config.json'] as any)?.default || defaultFirebaseConfig;
+// Fallback to local config file if environment variables are missing (for local development)
+const loadConfig = () => {
+  if (!firebaseConfig.apiKey) {
+    try {
+      // @ts-ignore
+      const configs = import.meta.glob('../firebase-applet-config.json', { eager: true });
+      const localConfig = (configs['../firebase-applet-config.json'] as any)?.default;
+      if (localConfig) {
+        Object.assign(firebaseConfig, localConfig);
+      }
+    } catch (e) {
+      console.warn("Could not load local firebase-applet-config.json");
+    }
+  }
+};
+
+loadConfig();
 
 const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
-export const db = getFirestore(app, (firebaseConfig as any).firestoreDatabaseId);
+export const db = getFirestore(app, firebaseConfig.firestoreDatabaseId);
 export const storage = getStorage(app);
 export const getMessagingSafe = async () => {
   if (typeof window !== 'undefined' && await isSupported()) {

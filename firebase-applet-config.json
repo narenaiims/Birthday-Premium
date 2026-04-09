@@ -1,10 +1,10 @@
 {
-  "projectId": "birthday-premium",
-  "appId": "1:729331481961:web:14fed8594d0dd2929e51f8",
-  "apiKey": "AIzaSyAeFYMgzBIPxN5kiMbVbUtHYyWWoLbUcZI",
-  "authDomain": "birthday-premium.firebaseapp.com",
-  "firestoreDatabaseId": "ai-studio-431fc71c-aef9-489c-99ae-e35cd292abf9",
-  "storageBucket": "birthday-premium.firebasestorage.app",
-  "messagingSenderId": "729331481961",
-  "measurementId": "G-53Z5D82SX9"
+  "projectId": "YOUR_PROJECT_ID",
+  "appId": "YOUR_APP_ID",
+  "apiKey": "YOUR_API_KEY",
+  "authDomain": "YOUR_AUTH_DOMAIN",
+  "firestoreDatabaseId": "YOUR_DATABASE_ID",
+  "storageBucket": "YOUR_STORAGE_BUCKET",
+  "messagingSenderId": "YOUR_MESSAGING_SENDER_ID",
+  "measurementId": "YOUR_MEASUREMENT_ID"
 }
