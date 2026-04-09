@@ -1,5 +1,4 @@
 import express from "express";
-import { createServer as createViteServer } from "vite";
 import path from "path";
 import { fileURLToPath } from "url";
 import cron from "node-cron";
@@ -14,44 +13,63 @@ let db: admin.firestore.Firestore | null = null;
 let messaging: admin.messaging.Messaging | null = null;
 
 async function initFirebaseAdmin() {
+  if (admin.apps.length > 0) {
+    db = admin.firestore();
+    messaging = admin.messaging();
+    return;
+  }
+
   try {
     const configPath = path.join(process.cwd(), "firebase-applet-config.json");
+    let config: any = {};
+    
     if (fs.existsSync(configPath)) {
-      const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-      
-      // Use service account if provided in env, else try default
-      const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT;
-      if (saEnv) {
-        let serviceAccount;
-        try {
-          if (saEnv.trim().startsWith("{")) {
-            serviceAccount = JSON.parse(saEnv);
-          } else if (fs.existsSync(saEnv)) {
-            serviceAccount = JSON.parse(fs.readFileSync(saEnv, "utf-8"));
-          }
-        } catch (e) {
-          console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT:", e);
-        }
-
-        if (serviceAccount) {
-          admin.initializeApp({
-            credential: admin.credential.cert(serviceAccount)
-          });
-        } else {
-          console.warn("FIREBASE_SERVICE_ACCOUNT provided but could not be parsed as JSON or found as a file.");
-          admin.initializeApp({ projectId: config.projectId });
-        }
-      } else {
-        // Fallback for local/dev if no service account
-        admin.initializeApp({
-          projectId: config.projectId
-        });
-      }
-      
-      db = admin.firestore(config.firestoreDatabaseId);
-      messaging = admin.messaging();
-      console.log("Firebase Admin initialized successfully.");
+      config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+    } else {
+      console.warn("firebase-applet-config.json not found. Using environment variables if available.");
+      config = {
+        projectId: process.env.FIREBASE_PROJECT_ID,
+        firestoreDatabaseId: process.env.FIREBASE_DATABASE_ID
+      };
     }
+    
+    if (!config.projectId && !process.env.FIREBASE_PROJECT_ID) {
+      console.error("No Firebase Project ID found. Admin SDK will not be initialized.");
+      return;
+    }
+
+    // Use service account if provided in env, else try default
+    const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT;
+    if (saEnv) {
+      let serviceAccount;
+      try {
+        if (saEnv.trim().startsWith("{")) {
+          serviceAccount = JSON.parse(saEnv);
+        } else if (fs.existsSync(saEnv)) {
+          serviceAccount = JSON.parse(fs.readFileSync(saEnv, "utf-8"));
+        }
+      } catch (e) {
+        console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT:", e);
+      }
+
+      if (serviceAccount) {
+        admin.initializeApp({
+          credential: admin.credential.cert(serviceAccount)
+        });
+      } else {
+        console.warn("FIREBASE_SERVICE_ACCOUNT provided but could not be parsed. Falling back to project ID.");
+        admin.initializeApp({ projectId: config.projectId || process.env.FIREBASE_PROJECT_ID });
+      }
+    } else {
+      // Fallback for local/dev or if Vercel has default credentials
+      admin.initializeApp({
+        projectId: config.projectId || process.env.FIREBASE_PROJECT_ID
+      });
+    }
+    
+    db = admin.firestore(config.firestoreDatabaseId || process.env.FIREBASE_DATABASE_ID);
+    messaging = admin.messaging();
+    console.log("Firebase Admin initialized successfully.");
   } catch (error) {
     console.error("Error initializing Firebase Admin:", error);
   }
@@ -199,11 +217,23 @@ async function startServer() {
 
   if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
     const distPath = path.join(process.cwd(), "dist");
-    app.use(express.static(distPath));
-    app.get("*", (req, res) => {
-      res.sendFile(path.join(distPath, "index.html"));
-    });
+    if (fs.existsSync(distPath)) {
+      app.use(express.static(distPath));
+      app.get("*", (req, res) => {
+        const indexPath = path.join(distPath, "index.html");
+        if (fs.existsSync(indexPath)) {
+          res.sendFile(indexPath);
+        } else {
+          res.status(404).send("Frontend build not found. Please run 'npm run build'.");
+        }
+      });
+    } else {
+      app.get("*", (req, res) => {
+        res.status(404).send("Dist directory not found. Please run 'npm run build'.");
+      });
+    }
   } else {
+    const { createServer: createViteServer } = await import("vite");
     const vite = await createViteServer({
       server: { middlewareMode: true },
       appType: "spa",
