@@ -1,169 +1,58 @@
 /**
  * @license
  * SPDX-License-Identifier: Apache-2.0
+ * Migrated from Firebase → Supabase
  */
 /// <reference types="vite/client" />
 
 import React, { useState, useEffect, useMemo, Key, createContext, useContext } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
-  Plus, 
-  Search, 
-  LayoutDashboard, 
-  Clock, 
-  Calendar, 
-  Users, 
-  Download, 
-  X, 
-  Copy, 
-  Phone, 
-  MessageCircle,
-  ChevronLeft,
-  ChevronRight,
-  Cake,
-  ExternalLink,
-  Facebook,
-  FileText,
-  Trash2,
-  LogOut,
-  Mail,
-  Lock,
-  CheckCircle,
-  AlertCircle,
-  User as UserIcon,
-  Bell,
-  CalendarDays,
-  Camera,
-  Upload,
-  Loader2,
-  Sparkles,
-  Gift,
-  Star,
-  Heart,
-  Laugh,
-  Briefcase,
-  Music,
-  Share2,
-  CalendarPlus,
-  ArrowRight,
-  Mic,
-  Sun,
-  Moon
+  Plus, Search, LayoutDashboard, Clock, Calendar, Users, Download, X, Copy, Phone, MessageCircle,
+  ChevronLeft, ChevronRight, Cake, ExternalLink, Facebook, FileText, Trash2, LogOut, Mail, Lock,
+  CheckCircle, AlertCircle, User as UserIcon, Bell, CalendarDays, Camera, Upload, Loader2,
+  Sparkles, Gift, Star, Heart, Laugh, Briefcase, Music, Share2, CalendarPlus, ArrowRight, Mic,
+  Sun, Moon
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { generateSmartWish, generateGiftIdeas, polishWish } from "./services/aiService";
-import { 
-  onAuthStateChanged, 
-  signInWithPopup, 
-  signOut, 
-  User, 
-  signInWithEmailAndPassword, 
-  createUserWithEmailAndPassword,
-  updateProfile
-} from "firebase/auth";
-import { 
-  collection, 
-  doc, 
-  onSnapshot, 
-  setDoc, 
-  addDoc, 
-  deleteDoc, 
-  query, 
-  orderBy, 
-  serverTimestamp,
-  getDocs,
-  writeBatch,
-  where,
-  collectionGroup,
-  getDoc,
-  updateDoc
-} from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
-import { auth, db, googleProvider, getMessagingSafe, storage } from "./firebase";
-import { getToken, onMessage } from "firebase/messaging";
+import { supabase, isConfigured } from "./supabase";
+import type { Session, User } from "@supabase/supabase-js";
 
 // ─── Auth Context ─────────────────────────────────────────────────────────────
 interface AuthContextType {
   user: User | null;
+  session: Session | null;
   loading: boolean;
-  error: string | null;
 }
 
-const AuthContext = createContext<AuthContextType>({ user: null, loading: true, error: null });
+const AuthContext = createContext<AuthContextType>({ user: null, session: null, loading: true });
 
 export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
+  const [session, setSession] = useState<Session | null>(null);
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
-      setUser(user);
+    // Get initial session
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      setSession(session);
+      setUser(session?.user ?? null);
       setLoading(false);
-      setError(null);
-
-      if (user) {
-        // Create or update user profile in Firestore
-        const userRef = doc(db, "users", user.uid);
-        setDoc(userRef, {
-          uid: user.uid,
-          email: user.email,
-          name: user.displayName || user.email?.split('@')[0] || "User",
-          photoURL: user.photoURL,
-          lastLogin: serverTimestamp()
-        }, { merge: true });
-
-        // Request FCM token
-        const requestToken = async () => {
-          try {
-            const m = await getMessagingSafe();
-            if (!m) return;
-
-            const permission = await Notification.requestPermission();
-            if (permission === 'granted') {
-              const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY;
-              if (vapidKey) {
-                const token = await getToken(m, { vapidKey });
-                if (token) {
-                  await updateDoc(userRef, { fcmToken: token });
-                  console.log("FCM Token registered:", token);
-                }
-              } else {
-                console.warn("VITE_FIREBASE_VAPID_KEY not found in environment.");
-              }
-            }
-          } catch (err) {
-            console.error("Error registering FCM token:", err);
-          }
-        };
-        requestToken();
-      }
     });
-    return unsubscribe;
-  }, []);
 
-  // Handle foreground messages
-  useEffect(() => {
-    let unsubscribe: (() => void) | null = null;
-    
-    const setupMessaging = async () => {
-      const m = await getMessagingSafe();
-      if (m) {
-        unsubscribe = onMessage(m, (payload) => {
-          console.log("Foreground message received:", payload);
-          // You could show a custom toast here if you want
-        });
-      }
-    };
+    // Listen for auth changes
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+      setSession(session);
+      setUser(session?.user ?? null);
+      setLoading(false);
+    });
 
-    setupMessaging();
-    return () => {
-      if (unsubscribe) unsubscribe();
-    };
+    return () => subscription.unsubscribe();
   }, []);
 
   return (
-    <AuthContext.Provider value={{ user, loading }}>
+    <AuthContext.Provider value={{ user, session, loading }}>
       {children}
     </AuthContext.Provider>
   );
@@ -180,11 +69,11 @@ function Login() {
   const [loading, setLoading] = useState(false);
 
   const handleGoogleSignIn = async () => {
-    try {
-      await signInWithPopup(auth, googleProvider);
-    } catch (err: any) {
-      setError(err.message);
-    }
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: "google",
+      options: { redirectTo: window.location.origin },
+    });
+    if (error) setError(error.message);
   };
 
   const handleEmailAuth = async (e: React.FormEvent) => {
@@ -193,9 +82,11 @@ function Login() {
     setLoading(true);
     try {
       if (isRegister) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const { error } = await supabase.auth.signUp({ email, password });
+        if (error) throw error;
       } else {
-        await signInWithEmailAndPassword(auth, email, password);
+        const { error } = await supabase.auth.signInWithPassword({ email, password });
+        if (error) throw error;
       }
     } catch (err: any) {
       setError(err.message);
@@ -379,8 +270,7 @@ function getZodiacSign(dobStr: string) {
 }
 
 function isMilestoneBirthday(age: number) {
-  const milestones = [1, 5, 10, 13, 16, 18, 21, 25, 30, 40, 50, 60, 70, 75, 80, 90, 100];
-  return milestones.includes(age);
+  return [1, 5, 10, 13, 16, 18, 21, 25, 30, 40, 50, 60, 70, 75, 80, 90, 100].includes(age);
 }
 
 function downloadICS(person: Person) {
@@ -388,22 +278,15 @@ function downloadICS(person: Person) {
   const year = new Date().getFullYear();
   const start = new Date(year, date.getMonth(), date.getDate());
   const end = new Date(year, date.getMonth(), date.getDate() + 1);
-
-  const formatDate = (d: Date) => d.toISOString().replace(/-|:|\.\d+/g, "");
-  
+  const formatDate = (d: Date) => d.toISOString().replace(/-|:|\\.\\d+/g, "");
   const icsContent = [
-    "BEGIN:VCALENDAR",
-    "VERSION:2.0",
-    "BEGIN:VEVENT",
+    "BEGIN:VCALENDAR", "VERSION:2.0", "BEGIN:VEVENT",
     `SUMMARY:🎂 ${person.name}'s Birthday`,
     `DTSTART;VALUE=DATE:${formatDate(start).slice(0, 8)}`,
     `DTEND;VALUE=DATE:${formatDate(end).slice(0, 8)}`,
-    "RRULE:FREQ=YEARLY",
-    "DESCRIPTION:Birthday reminder from Birthday App",
-    "END:VEVENT",
-    "END:VCALENDAR"
+    "RRULE:FREQ=YEARLY", "DESCRIPTION:Birthday reminder from Birthday App",
+    "END:VEVENT", "END:VCALENDAR"
   ].join("\r\n");
-
   const blob = new Blob([icsContent], { type: "text/calendar;charset=utf-8" });
   const link = document.createElement("a");
   link.href = window.URL.createObjectURL(blob);
@@ -421,34 +304,21 @@ function getReminderLabel(days: number) {
   return { label: `${days}d away`, color: "#B8A9FF", bg: "rgba(184,169,255,0.15)" };
 }
 
-function generateShareLink(groupName: string) {
-  const encoded = btoa(groupName + "-" + Date.now());
-  return `https://birthdayapp.link/join/${encoded.slice(0, 12)}`;
-}
-
 // ─── Components ───────────────────────────────────────────────────────────────
-
 function Confetti({ active }: { active: boolean }) {
   if (!active) return null;
   const pieces = Array.from({ length: 40 }, (_, i) => i);
   return (
     <div className="fixed inset-0 pointer-events-none z-[9999] overflow-hidden">
       {pieces.map(i => (
-        <div 
-          key={i} 
-          className="absolute animate-confetti"
-          style={{
-            left: `${Math.random() * 100}%`,
-            top: "-20px",
-            width: `${6 + Math.random() * 8}px`,
-            height: `${6 + Math.random() * 8}px`,
-            borderRadius: Math.random() > 0.5 ? "50%" : "2px",
-            background: ["#FF6B6B", "#FFB347", "#A8E6CF", "#88D8FF", "#B8A9FF", "#FFD700", "#FF69B4"][Math.floor(Math.random() * 7)],
-            animationDelay: `${Math.random() * 2}s`,
-            animationDuration: `${1.5 + Math.random() * 2}s`,
-            transform: `rotate(${Math.random() * 360}deg)`,
-          }} 
-        />
+        <div key={i} className="absolute animate-confetti" style={{
+          left: `${Math.random() * 100}%`, top: "-20px",
+          width: `${6 + Math.random() * 8}px`, height: `${6 + Math.random() * 8}px`,
+          borderRadius: Math.random() > 0.5 ? "50%" : "2px",
+          background: ["#FF6B6B","#FFB347","#A8E6CF","#88D8FF","#B8A9FF","#FFD700","#FF69B4"][Math.floor(Math.random()*7)],
+          animationDelay: `${Math.random() * 2}s`, animationDuration: `${1.5 + Math.random() * 2}s`,
+          transform: `rotate(${Math.random() * 360}deg)`,
+        }} />
       ))}
     </div>
   );
@@ -462,17 +332,8 @@ function Avatar({ initials, color, size = 44 }: { initials: string, color: strin
     default: "linear-gradient(135deg, #F7971E, #FFD200)",
   };
   return (
-    <div 
-      className="flex items-center justify-center font-bold text-white shrink-0 shadow-lg"
-      style={{
-        width: size, 
-        height: size, 
-        borderRadius: "50%",
-        background: colors[color] || colors.default,
-        fontSize: size * 0.36,
-        letterSpacing: "0.5px",
-      }}
-    >
+    <div className="flex items-center justify-center font-bold text-white shrink-0 shadow-lg"
+      style={{ width: size, height: size, borderRadius: "50%", background: colors[color] || colors.default, fontSize: size * 0.36, letterSpacing: "0.5px" }}>
       {initials}
     </div>
   );
@@ -498,15 +359,10 @@ function BirthdayCard({ person, onWish, onDelete, onShowDetail, onGroupWish, com
   const isMilestone = isMilestoneBirthday(age);
 
   return (
-    <motion.div 
-      whileHover={{ scale: 1.01 }}
-      whileTap={{ scale: 0.99 }}
+    <motion.div whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}
       onClick={() => onShowDetail(person)}
-      className={`group relative overflow-hidden flex items-center gap-4 p-4 rounded-2xl border border-card-border bg-card-bg cursor-pointer transition-colors hover:bg-white/10 hover:border-white/20 ${compact ? 'py-3' : 'py-4'}`}
-    >
-      {days === 0 && (
-        <div className="absolute inset-0 bg-gradient-to-br from-red-500/10 to-transparent pointer-events-none" />
-      )}
+      className={`group relative overflow-hidden flex items-center gap-4 p-4 rounded-2xl border border-card-border bg-card-bg cursor-pointer transition-colors hover:bg-white/10 hover:border-white/20 ${compact ? 'py-3' : 'py-4'}`}>
+      {days === 0 && <div className="absolute inset-0 bg-gradient-to-br from-red-500/10 to-transparent pointer-events-none" />}
       <div className="relative">
         <Avatar initials={person.avatar} color={person.group} size={compact ? 40 : 48} />
         {person.isFavorite && (
@@ -518,60 +374,33 @@ function BirthdayCard({ person, onWish, onDelete, onShowDetail, onGroupWish, com
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2 flex-wrap">
           <span className={`font-bold text-text-main truncate ${compact ? 'text-sm' : 'text-base'}`}>{person.name}</span>
-          {isMilestone && (
-            <span className="bg-purple-500/20 text-purple-400 text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-tighter border border-purple-500/30">
-              Milestone
-            </span>
-          )}
-          <span 
-            className="text-[10px] px-2 py-0.5 rounded-full font-semibold"
-            style={{ background: bg, color }}
-          >
-            {label}
-          </span>
+          {isMilestone && <span className="bg-purple-500/20 text-purple-400 text-[8px] font-black px-1.5 py-0.5 rounded-full uppercase tracking-tighter border border-purple-500/30">Milestone</span>}
+          <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold" style={{ background: bg, color }}>{label}</span>
         </div>
         <div className="flex items-center gap-3 mt-1">
-          <span className="text-xs text-white/40">
-            {MONTHS[dob.getMonth()]} {dob.getDate()} · Turns {age}
-          </span>
-          <span className="text-[10px] text-white/20 flex items-center gap-1">
-            <span className="text-indigo-400/50">{zodiac.icon}</span> {zodiac.sign}
-          </span>
+          <span className="text-xs text-white/40">{MONTHS[dob.getMonth()]} {dob.getDate()} · Turns {age}</span>
+          <span className="text-[10px] text-white/20 flex items-center gap-1"><span className="text-indigo-400/50">{zodiac.icon}</span> {zodiac.sign}</span>
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <button 
-          onClick={(e) => {
-            e.stopPropagation();
-            downloadICS(person);
-          }}
-          className="p-2 rounded-xl text-white/20 hover:text-white hover:bg-white/10 transition-all opacity-0 group-hover:opacity-100"
-          title="Export to Calendar"
-        >
+        <button onClick={(e) => { e.stopPropagation(); downloadICS(person); }}
+          className="p-2 rounded-xl text-white/20 hover:text-white hover:bg-white/10 transition-all opacity-0 group-hover:opacity-100" title="Export to Calendar">
           <CalendarPlus size={16} />
         </button>
         {onGroupWish && days <= 7 && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onGroupWish(person); }}
-            className="p-2 rounded-xl text-green-400 hover:bg-green-400/10 transition-all flex items-center gap-1"
-            title="Send Group Wish"
-          >
-            <MessageCircle size={16} />
-            <span className="text-[10px] font-bold hidden sm:inline">Group Wish</span>
+          <button onClick={(e) => { e.stopPropagation(); onGroupWish(person); }}
+            className="p-2 rounded-xl text-green-400 hover:bg-green-400/10 transition-all flex items-center gap-1" title="Send Group Wish">
+            <MessageCircle size={16} /><span className="text-[10px] font-bold hidden sm:inline">Group Wish</span>
           </button>
         )}
         {userRole === 'admin' && (
-          <button 
-            onClick={(e) => { e.stopPropagation(); onDelete(person.id); }}
-            className="p-2 rounded-xl text-white/20 hover:text-red-400 hover:bg-red-400/10 transition-all opacity-0 group-hover:opacity-100"
-          >
+          <button onClick={(e) => { e.stopPropagation(); onDelete(person.id); }}
+            className="p-2 rounded-xl text-white/20 hover:text-red-400 hover:bg-red-400/10 transition-all opacity-0 group-hover:opacity-100">
             <Trash2 size={16} />
           </button>
         )}
-        <button 
-          onClick={(e) => { e.stopPropagation(); onWish(person); }}
-          className={`px-3 py-1.5 rounded-xl text-xs font-bold text-white transition-all whitespace-nowrap ${days === 0 ? 'bg-gradient-to-r from-[#FF6B6B] to-[#FF8E53] shadow-lg shadow-red-500/20' : 'bg-white/10 hover:bg-white/20'}`}
-        >
+        <button onClick={(e) => { e.stopPropagation(); onWish(person); }}
+          className={`px-3 py-1.5 rounded-xl text-xs font-bold text-white transition-all whitespace-nowrap ${days === 0 ? 'bg-gradient-to-r from-[#FF6B6B] to-[#FF8E53] shadow-lg shadow-red-500/20' : 'bg-white/10 hover:bg-white/20'}`}>
           {days === 0 ? "🎉 Wish!" : "Send Wish"}
         </button>
       </div>
@@ -586,12 +415,8 @@ function GroupCard({ name, count, link, onCopy, onDelete, onBroadcast }: { name:
     "College Friends": { bg: "linear-gradient(135deg, rgba(17,153,142,0.15), rgba(56,239,125,0.1))", border: "rgba(17,153,142,0.3)", icon: "🎓" },
   };
   const c = colors[name] || { bg: "rgba(255,255,255,0.05)", border: "rgba(255,255,255,0.12)", icon: "👥" };
-  
   return (
-    <div 
-      className="group p-5 rounded-2xl border transition-all relative overflow-hidden"
-      style={{ background: c.bg, borderColor: c.border }}
-    >
+    <div className="group p-5 rounded-2xl border transition-all relative overflow-hidden" style={{ background: c.bg, borderColor: c.border }}>
       <div className="flex items-center justify-between mb-4">
         <div className="flex items-center gap-3">
           <span className="text-3xl">{c.icon}</span>
@@ -601,14 +426,10 @@ function GroupCard({ name, count, link, onCopy, onDelete, onBroadcast }: { name:
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <div className="text-xs bg-white/10 px-2.5 py-1 rounded-full text-white/60">
-            {count} 🎂
-          </div>
+          <div className="text-xs bg-white/10 px-2.5 py-1 rounded-full text-white/60">{count} 🎂</div>
           {count === 0 && (
-            <button 
-              onClick={(e) => { e.stopPropagation(); onDelete(name); }}
-              className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-400/10 transition-all opacity-0 group-hover:opacity-100"
-            >
+            <button onClick={(e) => { e.stopPropagation(); onDelete(name); }}
+              className="p-1.5 rounded-lg text-white/20 hover:text-red-400 hover:bg-red-400/10 transition-all opacity-0 group-hover:opacity-100">
               <Trash2 size={14} />
             </button>
           )}
@@ -619,16 +440,12 @@ function GroupCard({ name, count, link, onCopy, onDelete, onBroadcast }: { name:
         <div className="text-[11px] text-white/70 font-mono truncate">{link}</div>
       </div>
       <div className="flex gap-2">
-        <button 
-          onClick={(e) => { e.stopPropagation(); onCopy(link); }}
-          className="flex-1 bg-white/10 border border-white/10 hover:bg-white/20 rounded-xl py-2 text-xs font-bold text-[#F0EEE9] transition-colors flex items-center justify-center gap-2"
-        >
+        <button onClick={(e) => { e.stopPropagation(); onCopy(link); }}
+          className="flex-1 bg-white/10 border border-white/10 hover:bg-white/20 rounded-xl py-2 text-xs font-bold text-[#F0EEE9] transition-colors flex items-center justify-center gap-2">
           <Copy size={14} /> Copy Link
         </button>
-        <button 
-          onClick={(e) => { e.stopPropagation(); onBroadcast(); }}
-          className="flex-1 bg-gradient-to-r from-[#25D366] to-[#128C7E] rounded-xl py-2 text-xs font-bold text-white shadow-lg shadow-green-500/10 flex items-center justify-center gap-2"
-        >
+        <button onClick={(e) => { e.stopPropagation(); onBroadcast(); }}
+          className="flex-1 bg-gradient-to-r from-[#25D366] to-[#128C7E] rounded-xl py-2 text-xs font-bold text-white shadow-lg shadow-green-500/10 flex items-center justify-center gap-2">
           <MessageCircle size={14} /> Broadcast
         </button>
       </div>
@@ -646,7 +463,32 @@ export default function App() {
 }
 
 function AuthWrapper() {
-  const { user, loading, error } = useAuth();
+  const { user, loading } = useAuth();
+
+  if (!isConfigured) {
+    return (
+      <div className="min-h-screen bg-[#0D0C1D] flex items-center justify-center p-6">
+        <div className="w-full max-w-md bg-card-bg border border-red-500/30 rounded-[32px] p-8 shadow-2xl text-center">
+          <div className="w-16 h-16 bg-red-500/20 rounded-2xl flex items-center justify-center mx-auto mb-6">
+            <AlertCircle size={32} className="text-red-400" />
+          </div>
+          <h1 className="text-2xl font-bold mb-4">Configuration Required</h1>
+          <p className="text-white/60 text-sm mb-8">
+            Supabase keys are missing. Add these 2 variables to your Vercel project:
+          </p>
+          <div className="space-y-3 text-left bg-black/20 p-4 rounded-xl border border-white/5 mb-8">
+            <p className="text-[10px] font-bold uppercase tracking-widest text-white/40">Required Variables:</p>
+            <code className="block text-[11px] text-indigo-300">VITE_SUPABASE_URL</code>
+            <code className="block text-[11px] text-indigo-300">VITE_SUPABASE_ANON_KEY</code>
+          </div>
+          <button onClick={() => window.location.reload()}
+            className="w-full bg-white/5 hover:bg-white/10 border border-white/10 py-3 rounded-xl font-bold transition-all">
+            Check Again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -656,9 +498,7 @@ function AuthWrapper() {
     );
   }
 
-  if (error || !user) {
-    return <Login />;
-  }
+  if (!user) return <Login />;
 
   const isJoin = window.location.pathname.startsWith("/join/");
   if (isJoin) return <JoinGroup />;
@@ -666,6 +506,7 @@ function AuthWrapper() {
   return <BirthdayApp />;
 }
 
+// ─── Join Group ───────────────────────────────────────────────────────────────
 function JoinGroup() {
   const { user, loading: authLoading } = useAuth();
   const [loading, setLoading] = useState(true);
@@ -674,41 +515,31 @@ function JoinGroup() {
 
   useEffect(() => {
     if (authLoading || !token) return;
-    if (!user) {
-      setLoading(false);
-      return;
-    }
+    if (!user) { setLoading(false); return; }
 
     const join = async () => {
       try {
-        const inviteDoc = await getDoc(doc(db, "invites", token));
-        if (!inviteDoc.exists()) {
-          setError("Invalid or expired invite link.");
-          setLoading(false);
-          return;
-        }
+        const { data: invite, error: inviteErr } = await supabase
+          .from("invites").select("group_id").eq("token", token).single();
+        if (inviteErr || !invite) { setError("Invalid or expired invite link."); setLoading(false); return; }
 
-        const { groupId } = inviteDoc.data();
-        
-        // Add user to group
-        await setDoc(doc(db, "groups", groupId, "members", user.uid), {
-          uid: user.uid,
+        const { error: memberErr } = await supabase.from("group_members").upsert({
+          group_id: invite.group_id,
+          user_id: user.id,
           email: user.email,
-          name: user.displayName || user.email?.split('@')[0] || "User",
-          role: 'viewer',
-          joinedAt: new Date().toISOString()
-        }, { merge: true });
+          name: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
+          role: "viewer",
+          joined_at: new Date().toISOString(),
+        });
+        if (memberErr) throw memberErr;
 
-        // Redirect to home
-        localStorage.setItem("activeGroupId", groupId);
+        localStorage.setItem("activeGroupId", invite.group_id);
         window.location.href = "/";
       } catch (err) {
-        console.error(err);
         setError("Failed to join group.");
         setLoading(false);
       }
     };
-
     join();
   }, [user, authLoading, token]);
 
@@ -724,8 +555,8 @@ function JoinGroup() {
   if (!user) {
     return (
       <div className="min-h-screen bg-[#0D0C1D] flex flex-col items-center justify-center p-6 text-center">
-        <div className="w-12 h-12 border-4 border-indigo-500/20 border-t-indigo-500 rounded-full animate-spin mb-4" />
-        <h2 className="text-xl font-bold">Authenticating...</h2>
+        <h2 className="text-xl font-bold mb-4">Sign in to join this group</h2>
+        <Login />
       </div>
     );
   }
@@ -733,10 +564,10 @@ function JoinGroup() {
   if (error) {
     return (
       <div className="min-h-screen bg-[#0D0C1D] flex flex-col items-center justify-center p-6 text-center">
-        <div className="text-5xl mb-4">⚠️</div>
-        <h2 className="text-2xl font-bold mb-2">Oops!</h2>
-        <p className="text-white/40 mb-8">{error}</p>
-        <button onClick={() => window.location.href = "/"} className="bg-indigo-500 px-8 py-3 rounded-xl font-bold">Go Home</button>
+        <AlertCircle size={48} className="text-red-400 mb-4" />
+        <h2 className="text-xl font-bold mb-2">Could not join</h2>
+        <p className="text-white/50 mb-6">{error}</p>
+        <a href="/" className="text-indigo-400 underline">Go to app</a>
       </div>
     );
   }
@@ -744,18 +575,219 @@ function JoinGroup() {
   return null;
 }
 
-function CalendarView({ 
-  people, 
-  calendarDate, 
-  setCalendarDate, 
-  selectedCalendarDay, 
-  setSelectedCalendarDay,
-  onWish,
-  onDelete,
-  userRole,
-  onGroupWish,
-  onShowDetail
-}: {
+// ─── Settings / Profile Panel ─────────────────────────────────────────────────
+function SettingsPanel({ user, userPrefs, setUserPrefs, showToast, wishTemplates, setShowManageTemplates }: {
+  user: User | null;
+  userPrefs: any;
+  setUserPrefs: any;
+  showToast: (msg: string, type?: "success" | "error") => void;
+  wishTemplates: WishTemplate[];
+  setShowManageTemplates: (show: boolean) => void;
+}) {
+  const [name, setName] = useState(user?.user_metadata?.full_name || user?.email?.split("@")[0] || "");
+  const [isSaving, setIsSaving] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+
+  const handleUpdateName = async () => {
+    if (!user || !name.trim()) return;
+    setIsSaving(true);
+    try {
+      await supabase.auth.updateUser({ data: { full_name: name } });
+      const { error } = await supabase.from("profiles").update({ name }).eq("id", user.id);
+      if (error) throw error;
+      showToast("Profile name updated successfully!");
+    } catch (error) {
+      showToast("Failed to update name", "error");
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
+  const handleTogglePref = async (key: string) => {
+    if (!user) return;
+    const newVal = !userPrefs[key];
+    setUserPrefs((prev: any) => ({ ...prev, [key]: newVal }));
+    const dbKey = key === "remindOnDay" ? "remind_on_day"
+      : key === "remind1DayBefore" ? "remind_1_day_before"
+      : "remind_3_days_before";
+    const { error } = await supabase.from("profiles").update({ [dbKey]: newVal }).eq("id", user.id);
+    if (error) {
+      showToast("Failed to update preference", "error");
+      setUserPrefs((prev: any) => ({ ...prev, [key]: !newVal }));
+    }
+  };
+
+  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || !user) return;
+    if (!file.type.startsWith("image/")) { showToast("Please upload an image file", "error"); return; }
+    if (file.size > 2 * 1024 * 1024) { showToast("Image size should be less than 2MB", "error"); return; }
+    setIsUploading(true);
+    try {
+      const ext = file.name.split(".").pop();
+      const path = `profiles/${user.id}/avatar.${ext}`;
+      const { error: uploadErr } = await supabase.storage.from("avatars").upload(path, file, { upsert: true });
+      if (uploadErr) throw uploadErr;
+      const { data: { publicUrl } } = supabase.storage.from("avatars").getPublicUrl(path);
+      await supabase.auth.updateUser({ data: { avatar_url: publicUrl } });
+      await supabase.from("profiles").update({ photo_url: publicUrl }).eq("id", user.id);
+      showToast("Profile picture updated!");
+    } catch (error) {
+      showToast("Failed to upload photo", "error");
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleEnableNotifications = async () => {
+    if (!("Notification" in window) || !("serviceWorker" in navigator)) {
+      showToast("Push notifications not supported in this browser", "error");
+      return;
+    }
+    try {
+      const permission = await Notification.requestPermission();
+      if (permission !== "granted") { showToast("Notification permission denied", "error"); return; }
+      const reg = await navigator.serviceWorker.ready;
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: import.meta.env.VITE_VAPID_PUBLIC_KEY,
+      });
+      await supabase.from("profiles").update({ push_subscription: JSON.stringify(sub) }).eq("id", user!.id);
+      showToast("🔔 Push notifications enabled!");
+    } catch (err) {
+      showToast("Could not enable notifications", "error");
+    }
+  };
+
+  return (
+    <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} className="space-y-6 animate-slide-up">
+      <div className="bg-white/5 border border-white/10 rounded-3xl p-6">
+        <h3 className="text-lg font-bold mb-6 flex items-center gap-2"><UserIcon size={20} className="text-indigo-400" /> Profile</h3>
+        <div className="flex items-center gap-5 mb-6">
+          <div className="relative">
+            <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center overflow-hidden">
+              {user?.user_metadata?.avatar_url ? (
+                <img src={user.user_metadata.avatar_url} alt="Profile" className="w-full h-full object-cover" />
+              ) : (
+                <span className="text-3xl font-bold text-white">{(name || user?.email || "?")[0].toUpperCase()}</span>
+              )}
+            </div>
+            <label className="absolute -bottom-2 -right-2 bg-indigo-500 rounded-full p-1.5 cursor-pointer hover:bg-indigo-600 transition-colors">
+              {isUploading ? <Loader2 size={14} className="text-white animate-spin" /> : <Camera size={14} className="text-white" />}
+              <input type="file" accept="image/*" className="hidden" onChange={handlePhotoUpload} disabled={isUploading} />
+            </label>
+          </div>
+          <div className="flex-1">
+            <p className="text-sm font-bold text-white/80">{user?.email}</p>
+            <p className="text-xs text-white/40 mt-1">Member since {new Date(user?.created_at || Date.now()).toLocaleDateString()}</p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <input value={name} onChange={(e) => setName(e.target.value)}
+            className="flex-1 bg-white/5 border border-white/10 rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
+            placeholder="Your display name" />
+          <button onClick={handleUpdateName} disabled={isSaving}
+            className="bg-indigo-500 hover:bg-indigo-600 px-5 py-3 rounded-xl text-sm font-bold transition-all disabled:opacity-50">
+            {isSaving ? "Saving..." : "Save"}
+          </button>
+        </div>
+      </div>
+
+      <div className="bg-white/5 border border-white/10 rounded-3xl p-6">
+        <h3 className="text-lg font-bold mb-6 flex items-center gap-2"><Bell size={20} className="text-indigo-400" /> Notification Preferences</h3>
+        <div className="space-y-4">
+          {[
+            { key: "remindOnDay", label: "Remind on birthday", desc: "Get notified on the actual birthday" },
+            { key: "remind1DayBefore", label: "1 day before", desc: "Early reminder the day before" },
+            { key: "remind3DaysBefore", label: "3 days before", desc: "Plan ahead with a 3-day notice" },
+          ].map(({ key, label, desc }) => (
+            <div key={key} className="flex items-center justify-between p-4 bg-white/5 rounded-2xl">
+              <div>
+                <p className="text-sm font-bold">{label}</p>
+                <p className="text-xs text-white/40">{desc}</p>
+              </div>
+              <button onClick={() => handleTogglePref(key)}
+                className={`w-12 h-6 rounded-full transition-all relative ${userPrefs[key] ? "bg-indigo-500" : "bg-white/10"}`}>
+                <div className={`absolute top-1 w-4 h-4 bg-white rounded-full transition-all shadow-sm ${userPrefs[key] ? "left-7" : "left-1"}`} />
+              </button>
+            </div>
+          ))}
+        </div>
+        <button onClick={handleEnableNotifications}
+          className="mt-4 w-full bg-white/5 border border-white/10 hover:bg-white/10 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2 transition-all">
+          <Bell size={16} /> Enable Push Notifications
+        </button>
+      </div>
+
+      <div className="bg-white/5 border border-white/10 rounded-3xl p-6">
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-lg font-bold flex items-center gap-2"><FileText size={20} className="text-indigo-400" /> Wish Templates</h3>
+          <button onClick={() => setShowManageTemplates(true)}
+            className="text-xs text-indigo-400 hover:underline">{wishTemplates.length} templates →</button>
+        </div>
+        <p className="text-sm text-white/40">Save your favourite birthday messages for quick access.</p>
+      </div>
+    </motion.div>
+  );
+}
+
+// ─── Manage Templates Modal ────────────────────────────────────────────────────
+function ManageTemplatesModal({ templates, onAdd, onDelete, onClose }: {
+  templates: WishTemplate[];
+  onAdd: (title: string, content: string) => void;
+  onDelete: (id: string) => void;
+  onClose: () => void;
+}) {
+  const [newTitle, setNewTitle] = useState("");
+  const [newContent, setNewContent] = useState("");
+  const [isAdding, setIsAdding] = useState(false);
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[200] flex items-end sm:items-center justify-center p-4">
+      <motion.div initial={{ opacity: 0, y: 40 }} animate={{ opacity: 1, y: 0 }}
+        className="w-full max-w-md bg-[#141329] border border-white/10 rounded-3xl p-6 shadow-2xl max-h-[80vh] flex flex-col">
+        <div className="flex items-center justify-between mb-6">
+          <h3 className="text-lg font-bold">Wish Templates</h3>
+          <button onClick={onClose} className="p-2 rounded-xl hover:bg-white/10"><X size={20} /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto space-y-3 mb-4">
+          {templates.length === 0 && <p className="text-white/40 text-sm text-center py-8">No templates yet. Add one below!</p>}
+          {templates.map(t => (
+            <div key={t.id} className="bg-white/5 rounded-2xl p-4 border border-white/10">
+              <div className="flex items-start justify-between gap-3">
+                <div className="flex-1">
+                  <p className="font-bold text-sm">{t.title}</p>
+                  <p className="text-xs text-white/50 mt-1 line-clamp-2">{t.content}</p>
+                </div>
+                <button onClick={() => onDelete(t.id)} className="text-white/30 hover:text-red-400 transition-colors"><Trash2 size={14} /></button>
+              </div>
+            </div>
+          ))}
+        </div>
+        {isAdding ? (
+          <div className="space-y-3">
+            <input value={newTitle} onChange={e => setNewTitle(e.target.value)} placeholder="Template title"
+              className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50" />
+            <textarea value={newContent} onChange={e => setNewContent(e.target.value)} placeholder="Template content..." rows={3}
+              className="w-full bg-white/5 border border-white/10 rounded-xl py-3 px-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none" />
+            <div className="flex gap-2">
+              <button onClick={() => setIsAdding(false)} className="flex-1 bg-white/5 border border-white/10 py-3 rounded-xl text-sm font-bold">Cancel</button>
+              <button onClick={() => { onAdd(newTitle, newContent); setNewTitle(""); setNewContent(""); setIsAdding(false); }}
+                className="flex-1 bg-indigo-500 hover:bg-indigo-600 py-3 rounded-xl text-sm font-bold transition-all">Save Template</button>
+            </div>
+          </div>
+        ) : (
+          <button onClick={() => setIsAdding(true)}
+            className="w-full bg-white/5 border border-white/10 hover:bg-white/10 py-3 rounded-xl text-sm font-bold flex items-center justify-center gap-2">
+            <Plus size={16} /> Add Template
+          </button>
+        )}
+      </motion.div>
+    </div>
+  );
+}
+
+// ─── Calendar View ────────────────────────────────────────────────────────────
+function CalendarView({ people, calendarDate, setCalendarDate, selectedCalendarDay, setSelectedCalendarDay, onWish, onDelete, userRole, onGroupWish, onShowDetail }: {
   people: Person[];
   calendarDate: Date;
   setCalendarDate: (d: Date) => void;
@@ -769,13 +801,10 @@ function CalendarView({
 }) {
   const year = calendarDate.getFullYear();
   const month = calendarDate.getMonth();
-
   const daysInMonth = new Date(year, month + 1, 0).getDate();
   const firstDayOfMonth = new Date(year, month, 1).getDay();
-
   const prevMonth = () => setCalendarDate(new Date(year, month - 1, 1));
   const nextMonth = () => setCalendarDate(new Date(year, month + 1, 1));
-
   const birthdaysByDay = useMemo(() => {
     const map: Record<number, Person[]> = {};
     people.forEach(p => {
@@ -787,7 +816,6 @@ function CalendarView({
     });
     return map;
   }, [people, month]);
-
   const selectedBirthdays = selectedCalendarDay ? birthdaysByDay[selectedCalendarDay] || [] : [];
 
   return (
@@ -795,552 +823,79 @@ function CalendarView({
       <div className="bg-white/5 border border-white/10 rounded-3xl p-6">
         <div className="flex items-center justify-between mb-8">
           <div className="flex items-center gap-4">
-            <div className="text-4xl font-black text-indigo-400 font-mono">
-              {(month + 1).toString().padStart(2, '0')}
-            </div>
-            <div>
-              <h3 className="text-xl font-bold">{FULL_MONTHS[month]}</h3>
-              <p className="text-xs text-white/30 uppercase tracking-widest font-bold">{year}</p>
-            </div>
+            <div className="text-4xl font-black text-indigo-400 font-mono">{(month + 1).toString().padStart(2, '0')}</div>
+            <div><h3 className="text-xl font-bold">{FULL_MONTHS[month]}</h3><p className="text-xs text-white/30 uppercase tracking-widest font-bold">{year}</p></div>
           </div>
           <div className="flex gap-2">
-            <button onClick={prevMonth} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all">
-              <ChevronLeft size={20} />
-            </button>
-            <button onClick={nextMonth} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all">
-              <ChevronRight size={20} />
-            </button>
+            <button onClick={prevMonth} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all"><ChevronLeft size={20} /></button>
+            <button onClick={nextMonth} className="p-2 rounded-xl bg-white/5 hover:bg-white/10 transition-all"><ChevronRight size={20} /></button>
           </div>
         </div>
-
         <div className="grid grid-cols-7 gap-2 mb-4">
-          {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map(d => (
-            <div key={d} className="text-center text-[10px] font-bold text-white/20 uppercase tracking-widest py-2">
-              {d}
-            </div>
+          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d => (
+            <div key={d} className="text-center text-[10px] font-bold text-white/20 uppercase tracking-widest py-2">{d}</div>
           ))}
-          {Array.from({ length: firstDayOfMonth }).map((_, i) => (
-            <div key={`pad-${i}`} className="aspect-square" />
-          ))}
-          {Array.from({ length: daysInMonth }).map((_, i) => {
-            const day = i + 1;
-            const hasBirthdays = !!birthdaysByDay[day];
-            const isSelected = selectedCalendarDay === day;
+          {Array.from({ length: firstDayOfMonth }).map((_, i) => <div key={`empty-${i}`} />)}
+          {Array.from({ length: daysInMonth }, (_, i) => i + 1).map(day => {
+            const bdays = birthdaysByDay[day] || [];
             const isToday = new Date().getDate() === day && new Date().getMonth() === month && new Date().getFullYear() === year;
-
+            const isSelected = selectedCalendarDay === day;
             return (
-              <button
-                key={day}
-                onClick={() => setSelectedCalendarDay(day)}
-                className={`aspect-square rounded-2xl flex flex-col items-center justify-center relative transition-all border ${
-                  isSelected 
-                    ? 'bg-indigo-500 border-indigo-400 text-white shadow-lg shadow-indigo-500/20' 
-                    : hasBirthdays 
-                      ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400' 
-                      : 'bg-white/5 border-white/5 text-white/40 hover:bg-white/10'
-                }`}
-              >
-                <span className={`text-sm font-bold ${isToday && !isSelected ? 'text-red-400' : ''}`}>{day}</span>
-                {hasBirthdays && !isSelected && (
-                  <div className="absolute bottom-2 w-1 h-1 rounded-full bg-indigo-400" />
-                )}
-                {isToday && !isSelected && (
-                  <div className="absolute top-2 right-2 w-1 h-1 rounded-full bg-red-400" />
+              <button key={day} onClick={() => setSelectedCalendarDay(isSelected ? null : day)}
+                className={`aspect-square rounded-xl flex flex-col items-center justify-center text-sm font-bold transition-all relative ${isSelected ? "bg-indigo-500 text-white" : isToday ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/30" : "hover:bg-white/10 text-white/60"}`}>
+                {day}
+                {bdays.length > 0 && (
+                  <div className={`absolute bottom-1 flex gap-0.5 ${isSelected ? "opacity-100" : ""}`}>
+                    {bdays.slice(0, 3).map((_, i) => <div key={i} className="w-1 h-1 rounded-full bg-[#FF6B6B]" />)}
+                  </div>
                 )}
               </button>
             );
           })}
         </div>
       </div>
-
-      <AnimatePresence mode="wait">
-        {selectedCalendarDay && (
-          <motion.div
-            key={selectedCalendarDay}
-            initial={{ opacity: 0, y: 10 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -10 }}
-            className="space-y-4"
-          >
-            <div className="flex items-center justify-between">
-              <h4 className="text-xs font-bold text-white/40 uppercase tracking-widest">
-                Birthdays on {FULL_MONTHS[month]} {selectedCalendarDay}
-              </h4>
-              <button onClick={() => setSelectedCalendarDay(null)} className="text-[10px] text-white/20 hover:text-white uppercase font-bold tracking-widest">
-                Clear
-              </button>
-            </div>
-            
-            {selectedBirthdays.length > 0 ? (
-              <div className="space-y-2">
-                {selectedBirthdays.map((p, idx) => (
-                  <motion.div
-                    key={p.id}
-                    initial={{ opacity: 0, y: 10 }}
-                    animate={{ opacity: 1, y: 0 }}
-                    transition={{ delay: idx * 0.05, duration: 0.3 }}
-                  >
-                    <BirthdayCard 
-                      person={p} 
-                      onWish={onWish} 
-                      onDelete={onDelete} 
-                      userRole={userRole} 
-                      onGroupWish={onGroupWish} 
-                      onShowDetail={onShowDetail}
-                    />
-                  </motion.div>
-                ))}
-              </div>
-            ) : (
-              <div className="py-12 text-center bg-white/5 rounded-3xl border border-dashed border-white/10">
-                <p className="text-sm text-white/20 font-medium">No celebrations on this day</p>
-              </div>
-            )}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {selectedCalendarDay && selectedBirthdays.length > 0 && (
+        <div className="space-y-3">
+          <h3 className="text-sm font-bold text-white/40 uppercase tracking-widest">{FULL_MONTHS[month]} {selectedCalendarDay}</h3>
+          {selectedBirthdays.map(p => <BirthdayCard key={p.id} person={p} onWish={onWish} onDelete={onDelete} onShowDetail={onShowDetail} onGroupWish={onGroupWish} userRole={userRole} />)}
+        </div>
+      )}
     </div>
   );
 }
 
-function ProfileView({ 
-  user, 
-  userPrefs, 
-  setUserPrefs, 
-  showToast,
-  wishTemplates,
-  setShowManageTemplates
-}: { 
-  user: User | null; 
-  userPrefs: any; 
-  setUserPrefs: any;
-  showToast: (msg: string, type?: "success" | "error") => void;
-  wishTemplates: WishTemplate[];
-  setShowManageTemplates: (show: boolean) => void;
-}) {
-  const [name, setName] = useState(user?.displayName || "");
-  const [isSaving, setIsSaving] = useState(false);
-  const [isUploading, setIsUploading] = useState(false);
-
-  const handleUpdateName = async () => {
-    if (!user || !name.trim()) return;
-    setIsSaving(true);
-    try {
-      // Update Auth Profile
-      await updateProfile(user, { displayName: name });
-      
-      // Update Firestore Profile
-      const userRef = doc(db, "users", user.uid);
-      await updateDoc(userRef, { name });
-      
-      showToast("Profile name updated successfully!");
-    } catch (error) {
-      console.error("Error updating name:", error);
-      showToast("Failed to update name", "error");
-    } finally {
-      setIsSaving(false);
-    }
-  };
-
-  const handleTogglePref = async (key: string) => {
-    if (!user) return;
-    const newVal = !userPrefs[key];
-    
-    // Optimistic update
-    setUserPrefs((prev: any) => ({ ...prev, [key]: newVal }));
-
-    try {
-      const userRef = doc(db, "users", user.uid);
-      await updateDoc(userRef, { [key]: newVal });
-    } catch (error) {
-      console.error("Error updating preference:", error);
-      showToast("Failed to update preference", "error");
-      // Revert on error
-      setUserPrefs((prev: any) => ({ ...prev, [key]: !newVal }));
-    }
-  };
-
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file || !user) return;
-
-    if (!file.type.startsWith('image/')) {
-      showToast("Please upload an image file", "error");
-      return;
-    }
-
-    if (file.size > 2 * 1024 * 1024) {
-      showToast("Image size should be less than 2MB", "error");
-      return;
-    }
-
-    setIsUploading(true);
-    try {
-      const storageRef = ref(storage, `profiles/${user.uid}/${file.name}`);
-      await uploadBytes(storageRef, file);
-      const downloadURL = await getDownloadURL(storageRef);
-
-      // Update Auth Profile
-      await updateProfile(user, { photoURL: downloadURL });
-
-      // Update Firestore Profile
-      const userRef = doc(db, "users", user.uid);
-      await updateDoc(userRef, { photoURL: downloadURL });
-
-      showToast("Profile picture updated!");
-    } catch (error) {
-      console.error("Error uploading photo:", error);
-      showToast("Failed to upload photo", "error");
-    } finally {
-      setIsUploading(false);
-    }
-  };
-
-  return (
-    <motion.div 
-      initial={{ opacity: 0, y: 20 }}
-      animate={{ opacity: 1, y: 0 }}
-      className="space-y-8 pb-12"
-    >
-      {/* Profile Header */}
-      <div className="relative bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border border-white/10 rounded-[32px] p-8 overflow-hidden">
-        <div className="absolute top-0 right-0 w-64 h-64 bg-indigo-500/10 blur-[100px] -mr-32 -mt-32 rounded-full" />
-        
-        <div className="relative flex flex-col items-center text-center">
-          <div className="relative group mb-6">
-            <div className="w-32 h-32 rounded-[40px] overflow-hidden border-4 border-white/10 shadow-2xl transition-transform group-hover:scale-105">
-              {user?.photoURL ? (
-                <img 
-                  src={user.photoURL} 
-                  alt={user.displayName || "User"} 
-                  className="w-full h-full object-cover"
-                  referrerPolicy="no-referrer"
-                />
-              ) : (
-                <div className="w-full h-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center text-4xl font-black text-white">
-                  {user?.displayName?.[0] || user?.email?.[0]?.toUpperCase() || "U"}
-                </div>
-              )}
-            </div>
-            <label className="absolute bottom-0 right-0 w-10 h-10 bg-white text-indigo-600 rounded-2xl flex items-center justify-center shadow-xl cursor-pointer hover:scale-110 transition-all border-2 border-[#0f0e21]">
-              <input type="file" className="hidden" onChange={handlePhotoUpload} accept="image/*" />
-              {isUploading ? <Loader2 size={18} className="animate-spin" /> : <Camera size={18} />}
-            </label>
-          </div>
-          
-          <h2 className="text-2xl font-black mb-1">{user?.displayName || "User"}</h2>
-          <p className="text-sm text-white/40 font-medium">{user?.email}</p>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-        <div className="space-y-8">
-          {/* Edit Name */}
-          <div className="bg-white/5 border border-white/10 rounded-[32px] p-8">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-white/40 mb-6 flex items-center gap-2">
-              <UserIcon size={16} className="text-indigo-400" /> Personal Information
-            </h3>
-            <div className="space-y-4">
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-white/60 ml-1">Display Name</label>
-                <div className="flex gap-3">
-                  <input 
-                    type="text" 
-                    value={name}
-                    onChange={(e) => setName(e.target.value)}
-                    placeholder="Enter your name"
-                    className="flex-1 bg-black/30 border border-white/10 rounded-2xl px-5 py-4 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all"
-                  />
-                  <button 
-                    onClick={handleUpdateName}
-                    disabled={isSaving || !name.trim() || name === user?.displayName}
-                    className="px-6 bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 disabled:hover:bg-indigo-500 text-white rounded-2xl font-bold text-sm transition-all flex items-center gap-2"
-                  >
-                    {isSaving ? <Loader2 size={18} className="animate-spin" /> : "Save"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Notification Preferences */}
-          <div className="bg-white/5 border border-white/10 rounded-[32px] p-8">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-white/40 mb-6 flex items-center gap-2">
-              <Bell size={16} className="text-purple-400" /> Notifications
-            </h3>
-            <div className="space-y-4">
-              {[
-                { id: "remindOnDay", label: "On the Day", sub: "Get notified when it's someone's birthday" },
-                { id: "remind1DayBefore", label: "1 Day Before", sub: "Get a heads-up the day before" },
-                { id: "remind3DaysBefore", label: "3 Days Before", sub: "Plenty of time to prepare a gift" },
-              ].map((pref) => (
-                <div 
-                  key={pref.id}
-                  onClick={() => handleTogglePref(pref.id)}
-                  className="flex items-center justify-between p-5 rounded-2xl bg-black/20 border border-white/5 hover:border-white/10 transition-all cursor-pointer group"
-                >
-                  <div className="pr-4">
-                    <div className="text-sm font-bold group-hover:text-white transition-colors">{pref.label}</div>
-                    <div className="text-[10px] text-white/30 font-medium uppercase tracking-wider mt-0.5">{pref.sub}</div>
-                  </div>
-                  <div className={`w-12 h-6 rounded-full p-1 transition-all duration-300 flex-shrink-0 ${userPrefs[pref.id] ? 'bg-indigo-500' : 'bg-white/10'}`}>
-                    <div className={`w-4 h-4 bg-white rounded-full transition-all duration-300 transform ${userPrefs[pref.id] ? 'translate-x-6' : 'translate-x-0'}`} />
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
-        <div className="space-y-8">
-          {/* Wish Templates */}
-          <div className="bg-white/5 border border-white/10 rounded-[32px] p-8">
-            <div className="flex items-center justify-between mb-6">
-              <h3 className="text-sm font-bold uppercase tracking-widest text-white/40 flex items-center gap-2">
-                <FileText size={16} className="text-orange-400" /> Wish Templates
-              </h3>
-              <button 
-                onClick={() => setShowManageTemplates(true)}
-                className="text-[10px] font-bold text-indigo-400 uppercase tracking-widest hover:text-indigo-300 transition-colors"
-              >
-                Manage
-              </button>
-            </div>
-            
-            <div className="space-y-3">
-              {wishTemplates.length === 0 ? (
-                <p className="text-xs text-white/20 italic text-center py-4">No templates created yet.</p>
-              ) : (
-                wishTemplates.slice(0, 3).map(t => (
-                  <div key={t.id} className="p-4 rounded-2xl bg-black/20 border border-white/5">
-                    <div className="text-xs font-bold mb-1">{t.title}</div>
-                    <div className="text-[10px] text-white/30 line-clamp-1">{t.content}</div>
-                  </div>
-                ))
-              )}
-              {wishTemplates.length > 3 && (
-                <p className="text-[10px] text-white/20 text-center">+{wishTemplates.length - 3} more templates</p>
-              )}
-            </div>
-          </div>
-
-          {/* Account Information */}
-          <div className="bg-white/5 border border-white/10 rounded-[32px] p-8">
-            <h3 className="text-sm font-bold uppercase tracking-widest text-white/40 mb-6 flex items-center gap-2">
-              <Lock size={16} className="text-emerald-400" /> Account Security
-            </h3>
-            <div className="space-y-4">
-              <div className="flex justify-between items-center p-4 rounded-2xl bg-black/20 border border-white/5">
-                <span className="text-xs text-white/40 font-bold uppercase tracking-wider">Email</span>
-                <span className="text-sm font-bold">{user?.email}</span>
-              </div>
-              <div className="flex justify-between items-center p-4 rounded-2xl bg-black/20 border border-white/5">
-                <span className="text-xs text-white/40 font-bold uppercase tracking-wider">User ID</span>
-                <span className="text-[10px] font-mono text-white/40">{user?.uid}</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* Account Actions */}
-      <div className="pt-4">
-        <button 
-          onClick={() => signOut(auth)}
-          className="w-full bg-red-500/10 hover:bg-red-500/20 text-red-400 py-5 rounded-[24px] font-bold text-sm transition-all border border-red-500/20 flex items-center justify-center gap-3"
-        >
-          <LogOut size={18} /> Sign Out
-        </button>
-      </div>
-    </motion.div>
-  );
-}
-
-function ManageTemplatesModal({ 
-  show, 
-  onClose, 
-  templates, 
-  user, 
-  showToast 
-}: { 
-  show: boolean; 
-  onClose: () => void; 
-  templates: WishTemplate[]; 
-  user: User | null;
-  showToast: (msg: string, type?: "success" | "error") => void;
-}) {
-  const [newTitle, setNewTitle] = useState("");
-  const [newContent, setNewContent] = useState("");
-  const [isAdding, setIsAdding] = useState(false);
-
-  const handleAdd = async () => {
-    if (!user || !newTitle.trim() || !newContent.trim()) return;
-    if (templates.length >= 10) {
-      showToast("Maximum 10 templates allowed", "error");
-      return;
-    }
-
-    setIsAdding(true);
-    try {
-      await addDoc(collection(db, "users", user.uid, "templates"), {
-        title: newTitle,
-        content: newContent,
-        createdAt: serverTimestamp()
-      });
-      setNewTitle("");
-      setNewContent("");
-      showToast("Template added successfully!");
-    } catch (error) {
-      console.error("Error adding template:", error);
-      showToast("Failed to add template", "error");
-    } finally {
-      setIsAdding(false);
-    }
-  };
-
-  const handleDelete = async (id: string) => {
-    if (!user) return;
-    try {
-      await deleteDoc(doc(db, "users", user.uid, "templates", id));
-      showToast("Template deleted");
-    } catch (error) {
-      console.error("Error deleting template:", error);
-      showToast("Failed to delete template", "error");
-    }
-  };
-
-  return (
-    <AnimatePresence>
-      {show && (
-        <div className="fixed inset-0 z-[110] flex items-center justify-center p-6">
-          <motion.div 
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-black/90 backdrop-blur-md"
-          />
-          <motion.div 
-            initial={{ scale: 0.9, opacity: 0, y: 20 }}
-            animate={{ scale: 1, opacity: 1, y: 0 }}
-            exit={{ scale: 0.9, opacity: 0, y: 20 }}
-            className="relative w-full max-w-2xl bg-card-bg border border-card-border rounded-[40px] shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
-          >
-            <div className="p-8 border-b border-white/5 flex items-center justify-between bg-white/2">
-              <div>
-                <h2 className="text-2xl font-black">Wish Templates</h2>
-                <p className="text-xs text-white/30 font-medium uppercase tracking-widest mt-1">
-                  Manage your custom birthday messages ({templates.length}/10)
-                </p>
-              </div>
-              <button 
-                onClick={onClose}
-                className="p-3 rounded-2xl bg-white/5 hover:bg-white/10 transition-all"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-8 space-y-8 no-scrollbar">
-              {/* Add New Template */}
-              {templates.length < 10 && (
-                <div className="bg-indigo-500/5 border border-indigo-500/20 rounded-[32px] p-6 space-y-4">
-                  <h3 className="text-sm font-bold flex items-center gap-2 text-indigo-400">
-                    <Plus size={16} /> Create New Template
-                  </h3>
-                  <div className="space-y-4">
-                    <input 
-                      type="text" 
-                      placeholder="Template Title (e.g. Professional, Funny)"
-                      value={newTitle}
-                      onChange={e => setNewTitle(e.target.value)}
-                      className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50"
-                    />
-                    <textarea 
-                      placeholder="Message content... Use {name} for the person's name."
-                      value={newContent}
-                      onChange={e => setNewContent(e.target.value)}
-                      className="w-full h-24 bg-black/40 border border-white/10 rounded-xl px-4 py-3 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/50 resize-none"
-                    />
-                    <button 
-                      onClick={handleAdd}
-                      disabled={isAdding || !newTitle.trim() || !newContent.trim()}
-                      className="w-full bg-indigo-500 hover:bg-indigo-600 disabled:opacity-50 text-white py-4 rounded-2xl font-bold text-sm transition-all flex items-center justify-center gap-2"
-                    >
-                      {isAdding ? <Loader2 size={18} className="animate-spin" /> : <Plus size={18} />}
-                      Add Template
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {/* Existing Templates */}
-              <div className="space-y-4">
-                <h3 className="text-xs font-bold uppercase tracking-widest text-white/20 ml-2">Your Templates</h3>
-                {templates.length === 0 ? (
-                  <div className="text-center py-12 bg-white/2 border border-dashed border-white/10 rounded-[32px]">
-                    <p className="text-sm text-white/20 italic">No templates yet. Create your first one above!</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 gap-4">
-                    {templates.map(t => (
-                      <div key={t.id} className="group bg-white/5 border border-white/10 rounded-[24px] p-6 hover:border-indigo-500/30 transition-all">
-                        <div className="flex items-start justify-between mb-3">
-                          <div className="font-bold text-indigo-400">{t.title}</div>
-                          <button 
-                            onClick={() => handleDelete(t.id)}
-                            className="p-2 rounded-lg bg-red-500/10 text-red-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500/20"
-                          >
-                            <Trash2 size={14} />
-                          </button>
-                        </div>
-                        <p className="text-sm text-white/60 leading-relaxed italic">"{t.content}"</p>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
-  );
-}
-
+// ─── BirthdayApp (main authenticated view) ────────────────────────────────────
 function BirthdayApp() {
   const { user } = useAuth();
+
   const [tab, setTab] = useState("dashboard");
   const [people, setPeople] = useState<Person[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
   const [activeGroupId, setActiveGroupId] = useState<string | null>(localStorage.getItem("activeGroupId"));
   const [members, setMembers] = useState<Member[]>([]);
   const [userRole, setUserRole] = useState<'admin' | 'viewer'>(user?.email === "narenaiims@gmail.com" ? 'admin' : 'viewer');
-  
+
   const [showAdd, setShowAdd] = useState(false);
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [newGroupName, setNewGroupName] = useState("");
   const [showManageMembers, setShowManageMembers] = useState(false);
   const [showWish, setShowWish] = useState<Person | null>(null);
   const [showPersonDetail, setShowPersonDetail] = useState<Person | null>(null);
+  const [isCustomGroup, setIsCustomGroup] = useState(false);
+  const [customGroupName, setCustomGroupName] = useState("");
   const [isRecording, setIsRecording] = useState(false);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
-    if (typeof window !== 'undefined') {
-      return document.documentElement.classList.contains('dark') ? 'dark' : 'light';
-    }
-    return 'dark';
+    return (localStorage.getItem("theme") as 'light' | 'dark') || 'dark';
   });
   const [aiGiftIdeas, setAiGiftIdeas] = useState<string[]>([]);
   const [isAiLoading, setIsAiLoading] = useState(false);
-  const [confetti, setConfetti] = useState(false);
+  const [confettiActive, setConfettiActive] = useState(false);
   const [filter, setFilter] = useState("all");
   const [monthFilter, setMonthFilter] = useState(new Date().getMonth());
   const [toast, setToast] = useState<{ msg: string; type: "success" | "error" } | null>(null);
   const [addForm, setAddForm] = useState({ name: "", dob: "", phone: "", relationship: "Friend" });
   const [importText, setImportText] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [customGroupName, setCustomGroupName] = useState("");
-  const [isCustomGroup, setIsCustomGroup] = useState(false);
   const [activeGroupInvite, setActiveGroupInvite] = useState<string | null>(null);
   const [groupInvites, setGroupInvites] = useState<Record<string, string>>({});
   const [importMode, setImportMode] = useState<"csv" | "whatsapp" | "facebook" | "contacts">("csv");
@@ -1349,743 +904,383 @@ function BirthdayApp() {
   const [proximityFilter, setProximityFilter] = useState("all");
   const [calendarDate, setCalendarDate] = useState(new Date());
   const [selectedCalendarDay, setSelectedCalendarDay] = useState<number | null>(null);
-  const [isUploading, setIsUploading] = useState(false);
   const [wishTemplates, setWishTemplates] = useState<WishTemplate[]>([]);
   const [showManageTemplates, setShowManageTemplates] = useState(false);
   const [templateForm, setTemplateForm] = useState({ title: "", content: "" });
   const [customWish, setCustomWish] = useState("");
   const [selectedTemplateId, setSelectedTemplateId] = useState<string | null>(null);
-  const [userPrefs, setUserPrefs] = useState({
-    remindOnDay: true,
-    remind1DayBefore: false,
-    remind3DaysBefore: false
-  });
+  const [userPrefs, setUserPrefs] = useState({ remindOnDay: true, remind1DayBefore: false, remind3DaysBefore: false });
 
   useEffect(() => {
-    if (theme === 'dark') {
-      document.documentElement.classList.add('dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-    }
+    if (theme === 'dark') document.documentElement.classList.add('dark');
+    else document.documentElement.classList.remove('dark');
+    localStorage.setItem("theme", theme);
   }, [theme]);
 
-  const toggleTheme = () => {
-    setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
+
+  const showToast = (msg: string, type: "success" | "error" = "success") => {
+    setToast({ msg, type });
+    setTimeout(() => setToast(null), 3000);
   };
 
-  const startVoiceRecognition = (person: Person) => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      showToast("Speech recognition not supported in this browser", "error");
-      return;
-    }
-
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-
-    recognition.onstart = () => {
-      setIsRecording(true);
-      showToast("Listening... Speak your wish!");
-    };
-
-    recognition.onresult = async (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      setIsRecording(false);
-      setIsAiLoading(true);
-      try {
-        const polished = await polishWish(transcript, person.name, person.relationship);
-        setCustomWish(polished);
-        showToast("Wish polished by AI! ✨");
-      } catch (err) {
-        setCustomWish(transcript);
-        showToast("Couldn't polish wish, using transcript.");
-      } finally {
-        setIsAiLoading(false);
-      }
-    };
-
-    recognition.onerror = (event: any) => {
-      setIsRecording(false);
-      showToast(`Speech recognition error: ${event.error}`, "error");
-    };
-
-    recognition.onend = () => {
-      setIsRecording(false);
-    };
-
-    recognition.start();
-  };
-
-  // 0. Fetch User Profile and Preferences
+  // ── 0. Fetch user preferences ──────────────────────────────────────────────
   useEffect(() => {
     if (!user) return;
-    const userRef = doc(db, "users", user.uid);
-    const unsubscribe = onSnapshot(userRef, (doc) => {
-      if (doc.exists()) {
-        const data = doc.data();
-        setUserPrefs({
-          remindOnDay: data.remindOnDay ?? true,
-          remind1DayBefore: data.remind1DayBefore ?? false,
-          remind3DaysBefore: data.remind3DaysBefore ?? false
+    supabase.from("profiles").select("remind_on_day,remind_1_day_before,remind_3_days_before").eq("id", user.id).single()
+      .then(({ data }) => {
+        if (data) setUserPrefs({
+          remindOnDay: data.remind_on_day ?? true,
+          remind1DayBefore: data.remind_1_day_before ?? false,
+          remind3DaysBefore: data.remind_3_days_before ?? false,
         });
-      }
-    });
-    return () => unsubscribe();
+      });
   }, [user]);
 
-  // 1. Fetch Groups the user is a member of
+  // ── 1. Fetch groups the user belongs to ───────────────────────────────────
   useEffect(() => {
     if (!user) return;
-    
-    // We'll use a collectionGroup query to find all 'members' documents where uid matches
-    // Note: This requires a composite index in Firestore. 
-    // If index is not ready, we'll fallback to a simpler approach or wait for user to create/join.
-    const q = query(collectionGroup(db, "members"), where("uid", "==", user.uid));
-    
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
-      const groupIds = snapshot.docs.map(doc => doc.ref.parent.parent?.id).filter(Boolean) as string[];
-      
-      if (groupIds.length === 0) {
-        setGroups([]);
-        return;
-      }
+    const loadGroups = async () => {
+      const { data: memberRows } = await supabase
+        .from("group_members").select("group_id").eq("user_id", user.id);
+      if (!memberRows?.length) { setGroups([]); return; }
+      const ids = memberRows.map(r => r.group_id);
+      const { data: groupRows } = await supabase.from("groups").select("*").in("id", ids);
+      if (!groupRows) return;
+      const mapped: Group[] = groupRows.map(g => ({
+        id: g.id, name: g.name, ownerId: g.owner_id,
+        giftPlanner: g.gift_planner || [], createdAt: g.created_at,
+      }));
+      setGroups(mapped);
+      if (!activeGroupId && mapped.length > 0) setActiveGroupId(mapped[0].id);
+    };
+    loadGroups();
 
-      // Fetch group details for each ID
-      const groupData: Group[] = [];
-      for (const id of groupIds) {
-        const gDoc = await getDoc(doc(db, "groups", id));
-        if (gDoc.exists()) {
-          groupData.push({ id: gDoc.id, ...gDoc.data() } as Group);
-        }
-      }
-      setGroups(groupData);
-      
-      // Auto-select first group if none active
-      if (!activeGroupId && groupData.length > 0) {
-        setActiveGroupId(groupData[0].id);
-      }
-    }, (error) => {
-      console.error("Error fetching groups:", error);
-      // Fallback: If collectionGroup fails (index missing), we might need to handle it
-    });
+    // Realtime subscription for group_members changes
+    const sub = supabase.channel("group-members-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "group_members", filter: `user_id=eq.${user.id}` }, loadGroups)
+      .subscribe();
+    return () => { sub.unsubscribe(); };
+  }, [user]);
 
-    return unsubscribe;
-  }, [user, activeGroupId]);
-
-  // 2. Fetch Birthdays and Members for the active group
+  // ── 2. Fetch birthdays & members for the active group ─────────────────────
   useEffect(() => {
     if (!user || !activeGroupId) return;
+    localStorage.setItem("activeGroupId", activeGroupId);
 
-    // Sync Birthdays
-    const bQ = query(collection(db, "groups", activeGroupId, "birthdays"), orderBy("createdAt", "desc"));
-    const unsubBirthdays = onSnapshot(bQ, (snapshot) => {
-      setPeople(snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Person)));
-    });
-
-    // Sync Members
-    const mQ = collection(db, "groups", activeGroupId, "members");
-    const unsubMembers = onSnapshot(mQ, (snapshot) => {
-      const mList = snapshot.docs.map(d => ({ uid: d.id, ...d.data() } as Member));
-      setMembers(mList);
-      
-      // Set current user's role
-      const me = mList.find(m => m.uid === user.uid);
-      if (user.email === "narenaiims@gmail.com") {
-        setUserRole('admin');
-      } else if (me) {
-        setUserRole(me.role);
-      }
-    });
-
-    return () => {
-      unsubBirthdays();
-      unsubMembers();
+    const loadBirthdays = async () => {
+      const { data } = await supabase.from("birthdays").select("*").eq("group_id", activeGroupId).order("created_at", { ascending: false });
+      if (data) setPeople(data.map(d => ({
+        id: d.id, name: d.name, dob: d.dob, avatar: d.avatar || d.name.slice(0,2).toUpperCase(),
+        phone: d.phone || "", group: activeGroup?.name || "", relationship: d.relationship, 
+        interests: d.interests || [], notes: d.notes || "", isFavorite: d.is_favorite || false,
+        createdAt: d.created_at, createdBy: d.created_by,
+      })));
     };
+
+    const loadMembers = async () => {
+      const { data } = await supabase.from("group_members").select("*").eq("group_id", activeGroupId);
+      if (data) {
+        const mapped: Member[] = data.map(m => ({ uid: m.user_id, email: m.email, name: m.name, role: m.role, joinedAt: m.joined_at }));
+        setMembers(mapped);
+        const me = mapped.find(m => m.uid === user.id);
+        if (user.email === "narenaiims@gmail.com") setUserRole('admin');
+        else if (me) setUserRole(me.role);
+      }
+    };
+
+    loadBirthdays();
+    loadMembers();
+
+    const bdaySub = supabase.channel(`birthdays-${activeGroupId}`)
+      .on("postgres_changes", { event: "*", schema: "public", table: "birthdays", filter: `group_id=eq.${activeGroupId}` }, loadBirthdays)
+      .subscribe();
+
+    return () => { bdaySub.unsubscribe(); };
   }, [user, activeGroupId]);
 
-  // 3. Fetch Invites for all groups
+  // ── 3. Fetch invites for active group ─────────────────────────────────────
   useEffect(() => {
-    if (groups.length === 0) return;
-    
-    const q = query(collection(db, "invites"), where("groupId", "in", groups.map(g => g.id)));
-    const unsub = onSnapshot(q, (snap) => {
-      const invites: Record<string, string> = {};
-      snap.docs.forEach(doc => {
-        invites[doc.data().groupId] = doc.id;
+    if (!activeGroupId) return;
+    supabase.from("invites").select("token,group_id").eq("group_id", activeGroupId).then(({ data }) => {
+      if (data?.length) {
+        setActiveGroupInvite(data[0].token);
+        setGroupInvites(prev => ({ ...prev, [activeGroupId]: data[0].token }));
+      }
+    });
+  }, [activeGroupId]);
+
+  // ── 4. Fetch wish templates ────────────────────────────────────────────────
+  useEffect(() => {
+    if (!user) return;
+    supabase.from("wish_templates").select("*").eq("user_id", user.id).order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (data) setWishTemplates(data.map(t => ({ id: t.id, title: t.title, content: t.content, createdAt: t.created_at })));
       });
-      setGroupInvites(invites);
-      
-      if (activeGroupId) {
-        setActiveGroupInvite(invites[activeGroupId] || null);
-      }
-    });
-    return unsub;
-  }, [groups, activeGroupId]);
-
-  // 4. Fetch User Preferences
-  useEffect(() => {
-    if (!user) return;
-    const unsub = onSnapshot(doc(db, "users", user.uid), (doc) => {
-      if (doc.exists()) {
-        const data = doc.data();
-        setUserPrefs({
-          remindOnDay: data.remindOnDay ?? true,
-          remind1DayBefore: data.remind1DayBefore ?? false,
-          remind3DaysBefore: data.remind3DaysBefore ?? false
-        });
-      }
-    });
-    return unsub;
-  }, [user]);
-
-  // Fetch Wish Templates
-  useEffect(() => {
-    if (!user) return;
-    const q = query(collection(db, "users", user.uid, "templates"), orderBy("createdAt", "desc"));
-    const unsub = onSnapshot(q, (snapshot) => {
-      setWishTemplates(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as WishTemplate)));
-    });
-    return unsub;
   }, [user]);
 
   const activeGroup = useMemo(() => groups.find(g => g.id === activeGroupId), [groups, activeGroupId]);
 
-  useEffect(() => {
-    if (activeGroupId) {
-      localStorage.setItem("activeGroupId", activeGroupId);
-    }
-  }, [activeGroupId]);
-
-  const showToast = (msg: string, type: "success" | "error" = "success") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 2800);
-  };
-
-  const sortedPeople = useMemo(() => {
-    return [...people]
-      .filter(p => {
-        const matchesSearch = !searchQuery || p.name.toLowerCase().includes(searchQuery.toLowerCase());
-        const days = getDaysUntilBirthday(p.dob);
-        let matchesProximity = true;
-        if (proximityFilter === "today") matchesProximity = days === 0;
-        else if (proximityFilter === "week") matchesProximity = days <= 7;
-        else if (proximityFilter === "month") matchesProximity = days <= 30;
-        
-        return matchesSearch && matchesProximity;
-      })
-      .sort((a, b) => getDaysUntilBirthday(a.dob) - getDaysUntilBirthday(b.dob));
-  }, [people, searchQuery, proximityFilter]);
-
-  const todayBdays = useMemo(() => people.filter(p => getDaysUntilBirthday(p.dob) === 0), [people]);
-  const tomorrowBdays = useMemo(() => people.filter(p => getDaysUntilBirthday(p.dob) === 1), [people]);
-  const weekBdays = useMemo(() => people.filter(p => { const d = getDaysUntilBirthday(p.dob); return d > 1 && d <= 7; }), [people]);
-  const monthBdays = useMemo(() => people.filter(p => { const d = getDaysUntilBirthday(p.dob); return d > 7 && d <= 30; }), [people]);
-  const monthListBdays = useMemo(() => people.filter(p => getBirthdayMonth(p.dob) === monthFilter), [people, monthFilter]);
-
+  // ── Handlers ────────────────────────────────────────────────────────────────
   const handleAddPerson = async () => {
-    if (!user || !activeGroupId || userRole !== 'admin') {
-      showToast("Only admins can add birthdays", "error");
-      return;
-    }
-    if (!addForm.name || !addForm.dob) {
-      showToast("Please fill in name and birthday", "error");
-      return;
-    }
+    if (!user || !activeGroupId || !addForm.name || !addForm.dob) return;
     const initials = addForm.name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase();
-    
-    try {
-      const personData = {
-        ...addForm,
-        avatar: initials,
-        createdAt: new Date().toISOString(),
-        createdBy: user.uid,
-        group: activeGroup?.name || "General"
-      };
-      await addDoc(collection(db, "groups", activeGroupId, "birthdays"), personData);
-      
-      setAddForm({ name: "", dob: "", phone: "", relationship: "Friend" });
-      setShowAdd(false);
-      showToast(`🎂 ${addForm.name} added successfully!`);
-    } catch (error) {
-      handleFirestoreError(error, "write" as any, `groups/${activeGroupId}/birthdays`);
-    }
+    const { error } = await supabase.from("birthdays").insert({
+      group_id: activeGroupId, name: addForm.name, dob: addForm.dob,
+      phone: addForm.phone, relationship: addForm.relationship,
+      avatar: initials, created_by: user.id,
+      interests: [], notes: "", is_favorite: false
+    });
+    if (error) { showToast("Failed to add birthday", "error"); return; }
+    setAddForm({ name: "", dob: "", phone: "", relationship: "Friend" });
+    setShowAdd(false);
+    showToast(`🎂 ${addForm.name} added successfully!`);
   };
 
   const handleDeletePerson = async (id: string) => {
-    if (!user || !activeGroupId || userRole !== 'admin') {
-      showToast("Only admins can delete birthdays", "error");
-      return;
-    }
-    try {
-      await deleteDoc(doc(db, "groups", activeGroupId, "birthdays", id));
-      showToast("Contact deleted");
-    } catch (error) {
-      handleFirestoreError(error, "delete" as any, `groups/${activeGroupId}/birthdays/${id}`);
-    }
+    if (userRole !== 'admin') { showToast("Only admins can delete birthdays", "error"); return; }
+    const { error } = await supabase.from("birthdays").delete().eq("id", id);
+    if (error) { showToast("Failed to delete birthday", "error"); return; }
+    showToast("Contact deleted");
   };
 
   const handleCreateGroup = async () => {
     if (!user || !newGroupName.trim()) return;
-
-    try {
-      // 1. Create the group
-      const groupRef = await addDoc(collection(db, "groups"), {
-        name: newGroupName.trim(),
-        ownerId: user.uid,
-        createdAt: new Date().toISOString()
-      });
-
-      // 2. Add the creator as an admin member
-      await setDoc(doc(db, "groups", groupRef.id, "members", user.uid), {
-        uid: user.uid,
-        email: user.email,
-        name: user.displayName || user.email?.split('@')[0] || "User",
-        role: 'admin',
-        joinedAt: new Date().toISOString()
-      });
-
-      setActiveGroupId(groupRef.id);
-      setNewGroupName("");
-      setShowCreateGroup(false);
-      showToast(`Group "${newGroupName}" created!`);
-    } catch (error) {
-      handleFirestoreError(error, "write" as any, "groups");
-    }
+    const { data: group, error } = await supabase.from("groups").insert({ name: newGroupName.trim(), owner_id: user.id }).select().single();
+    if (error || !group) { showToast("Failed to create group", "error"); return; }
+    await supabase.from("group_members").insert({
+      group_id: group.id, user_id: user.id, email: user.email,
+      name: user.user_metadata?.full_name || user.email?.split("@")[0] || "User",
+      role: "admin", joined_at: new Date().toISOString(),
+    });
+    setActiveGroupId(group.id);
+    setNewGroupName("");
+    setShowCreateGroup(false);
+    showToast(`Group "${newGroupName}" created!`);
   };
 
   const handleUpdateMemberRole = async (memberUid: string, newRole: 'admin' | 'viewer') => {
-    if (!user || !activeGroupId || userRole !== 'admin') return;
-    try {
-      await updateDoc(doc(db, "groups", activeGroupId, "members", memberUid), {
-        role: newRole
-      });
-      showToast("Role updated");
-    } catch (error) {
-      showToast("Failed to update role", "error");
-    }
+    if (userRole !== 'admin') return;
+    const { error } = await supabase.from("group_members").update({ role: newRole }).eq("group_id", activeGroupId!).eq("user_id", memberUid);
+    if (error) { showToast("Failed to update role", "error"); return; }
+    showToast("Role updated");
   };
 
   const handleRemoveMember = async (memberUid: string) => {
-    if (!user || !activeGroupId || userRole !== 'admin') return;
-    if (memberUid === user.uid) {
-      showToast("You cannot remove yourself", "error");
-      return;
-    }
-    try {
-      await deleteDoc(doc(db, "groups", activeGroupId, "members", memberUid));
-      showToast("Member removed");
-    } catch (error) {
-      showToast("Failed to remove member", "error");
-    }
+    if (userRole !== 'admin' || memberUid === user?.id) { showToast("Cannot remove yourself", "error"); return; }
+    const { error } = await supabase.from("group_members").delete().eq("group_id", activeGroupId!).eq("user_id", memberUid);
+    if (error) { showToast("Failed to remove member", "error"); return; }
+    showToast("Member removed");
   };
 
   const handleGenerateInvite = async () => {
     if (!user || !activeGroupId || userRole !== 'admin') return;
     const token = Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
-    try {
-      await setDoc(doc(db, "invites", token), {
-        groupId: activeGroupId,
-        createdAt: new Date().toISOString(),
-        createdBy: user.uid
-      });
-      const link = `${window.location.origin}/join/${token}`;
-      handleCopyLink(link);
-    } catch (error) {
-      handleFirestoreError(error, "write" as any, "invites");
-    }
+    const { error } = await supabase.from("invites").insert({ token, group_id: activeGroupId, created_by: user.id });
+    if (error) { showToast("Failed to generate invite", "error"); return; }
+    const link = `${window.location.origin}/join/${token}`;
+    handleCopyLink(link);
+    setActiveGroupInvite(token);
   };
 
-  const handleSignOut = () => {
-    signOut(auth);
+  const handleSignOut = () => supabase.auth.signOut();
+
+  const handleCopyLink = (link: string) => {
+    navigator.clipboard?.writeText(link).then(() => showToast("🔗 Link copied to clipboard!")).catch(() => showToast("Failed to copy link", "error"));
   };
 
-  const handleWish = (person: Person) => {
-    setShowWish(person);
-    setCustomWish("");
-    setSelectedTemplateId(null);
-    if (getDaysUntilBirthday(person.dob) === 0) {
-      setConfetti(true);
-      setTimeout(() => setConfetti(false), 3000);
-    }
-  };
-
-  const handleWhatsApp = (person: Person, message?: string) => {
-    const defaultMsg = `Happy Birthday ${person.name}! Hope you have a fantastic day! 🎂🎉`;
-    const finalMsg = message || defaultMsg;
-    const phone = person.phone.replace(/\D/g, "");
-    if (!phone) {
-      showToast("No phone number provided", "error");
-      return;
-    }
-    window.open(`https://wa.me/${phone}?text=${encodeURIComponent(finalMsg)}`, "_blank");
-    setShowWish(null);
-  };
-
-  const handleCall = (person: Person) => {
-    if (!person.phone) {
-      showToast("No phone number provided", "error");
-      return;
-    }
-    window.location.href = `tel:${person.phone}`;
-    setShowWish(null);
-  };
-
-  const handleCopyWish = (person: Person, message?: string) => {
-    const defaultMsg = `Happy Birthday ${person.name}! Wishing you a year full of joy, health, and success. Have a great one! 🎂✨`;
-    const finalMsg = message || defaultMsg;
-    navigator.clipboard.writeText(finalMsg).then(() => {
-      showToast("Wish message copied! 📋");
-      setShowWish(null);
-    }).catch(() => {
-      showToast("Failed to copy wish", "error");
-    });
-  };
-
-  const handleAddTemplate = async () => {
-    if (!user || !templateForm.title.trim() || !templateForm.content.trim()) return;
-    try {
-      await addDoc(collection(db, "users", user.uid, "templates"), {
-        title: templateForm.title.trim(),
-        content: templateForm.content.trim(),
-        createdAt: new Date().toISOString()
-      });
-      setTemplateForm({ title: "", content: "" });
-      showToast("Template added");
-    } catch (error) {
-      showToast("Failed to add template", "error");
-    }
+  const handleAddTemplate = async (title: string, content: string) => {
+    if (!user || !title.trim() || !content.trim()) return;
+    const { data, error } = await supabase.from("wish_templates").insert({ user_id: user.id, title: title.trim(), content: content.trim() }).select().single();
+    if (error) { showToast("Failed to add template", "error"); return; }
+    if (data) setWishTemplates(prev => [{ id: data.id, title: data.title, content: data.content, createdAt: data.created_at }, ...prev]);
+    showToast("Template added");
   };
 
   const handleDeleteTemplate = async (id: string) => {
-    if (!user) return;
-    try {
-      await deleteDoc(doc(db, "users", user.uid, "templates", id));
-      showToast("Template deleted");
-    } catch (error) {
-      showToast("Failed to delete template", "error");
-    }
+    const { error } = await supabase.from("wish_templates").delete().eq("id", id);
+    if (error) { showToast("Failed to delete template", "error"); return; }
+    setWishTemplates(prev => prev.filter(t => t.id !== id));
+    showToast("Template deleted");
   };
 
-  const handleGroupWish = (person: Person) => {
-    const groupName = activeGroup?.name || "the group";
-    const days = getDaysUntilBirthday(person.dob);
-    const when = days === 0 ? "today" : `on ${MONTHS[getBirthdayMonth(person.dob)]} ${getBirthdayDay(person.dob)}`;
-    const message = `Hey ${groupName}! It's ${person.name}'s birthday ${when}! Don't forget to wish them! 🎂✨`;
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
-  };
-
-  const handleGroupBroadcast = (group: Group) => {
-    // Filter birthdays for this group
-    // Note: This might need a separate fetch if not already in 'people'
-    // But for now we assume 'people' contains birthdays for the active group
-    const upcoming = people
-      .filter(p => getDaysUntilBirthday(p.dob) <= 30)
-      .sort((a, b) => getDaysUntilBirthday(a.dob) - getDaysUntilBirthday(b.dob));
-    
-    if (upcoming.length === 0) {
-      showToast("No upcoming birthdays to broadcast", "error");
-      return;
-    }
-
-    let message = `📅 Upcoming birthdays in ${group.name}:\n\n`;
-    upcoming.forEach(p => {
-      const days = getDaysUntilBirthday(p.dob);
-      const dateStr = `${MONTHS[getBirthdayMonth(p.dob)]} ${getBirthdayDay(p.dob)}`;
-      message += `• ${p.name}: ${dateStr} (${days === 0 ? "Today!" : days === 1 ? "Tomorrow" : `in ${days} days`})\n`;
-    });
-    
-    window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, "_blank");
-  };
-
-  const handleShareWeeklySummary = () => {
-    if (weekBdays.length === 0) {
-      showToast("No birthdays this week to share", "error");
-      return;
-    }
-
-    let message = `🎂 *Birthdays This Week* 🎂\n\n`;
-    weekBdays.forEach(p => {
-      const days = getDaysUntilBirthday(p.dob);
-      const dateStr = `${MONTHS[getBirthdayMonth(p.dob)]} ${getBirthdayDay(p.dob)}`;
-      message += `• *${p.name}*: ${dateStr} (${days === 0 ? "Today!" : days === 1 ? "Tomorrow" : `in ${days} days`})\n`;
-    });
-    message += `\nSent via Birthday App ✨`;
-
-    navigator.clipboard.writeText(message).then(() => {
-      showToast("Weekly summary copied! 📋");
-    });
+  const handleConfirmImport = async () => {
+    if (!user || !activeGroupId || userRole !== 'admin' || importPreview.length === 0) return;
+    const rows = importPreview.map(p => ({
+      group_id: activeGroupId, name: p.name, dob: p.dob, phone: p.phone || "",
+      avatar: p.avatar || p.name.slice(0,2).toUpperCase(), created_by: user.id,
+    }));
+    const { error } = await supabase.from("birthdays").insert(rows);
+    if (error) { showToast("Failed to import contacts", "error"); return; }
+    setImportText(""); setImportPreview([]); setImportStep(3);
+    showToast(`✅ Successfully imported ${importPreview.length} contacts!`);
   };
 
   const handleAddGiftItem = async (groupId: string) => {
     const item = prompt("What's the gift idea?");
     const cost = prompt("Estimated cost?");
     if (!item || !cost) return;
-
-    const groupRef = doc(db, "groups", groupId);
     const group = groups.find(g => g.id === groupId);
     if (!group) return;
-
-    const newItem: GiftItem = {
-      id: Math.random().toString(36).substr(2, 9),
-      item,
-      cost: parseFloat(cost) || 0,
-      status: 'suggested',
-      pledgedBy: user?.displayName || user?.email || "Anonymous"
-    };
-
+    const newItem: GiftItem = { id: Math.random().toString(36).substr(2, 9), item, cost: parseFloat(cost) || 0, status: 'suggested', pledgedBy: user?.user_metadata?.full_name || user?.email || "Anonymous" };
     const updatedPlanner = [...(group.giftPlanner || []), newItem];
-    await updateDoc(groupRef, { giftPlanner: updatedPlanner });
+    await supabase.from("groups").update({ gift_planner: updatedPlanner }).eq("id", groupId);
+    setGroups(prev => prev.map(g => g.id === groupId ? { ...g, giftPlanner: updatedPlanner } : g));
     showToast("Gift idea added! 🎁");
   };
 
   const handleUpdateGiftStatus = async (groupId: string, itemId: string, status: 'suggested' | 'bought' | 'delivered') => {
-    const groupRef = doc(db, "groups", groupId);
     const group = groups.find(g => g.id === groupId);
     if (!group) return;
-
-    const updatedPlanner = group.giftPlanner?.map(item => 
-      item.id === itemId ? { ...item, status } : item
-    );
-
-    await updateDoc(groupRef, { giftPlanner: updatedPlanner });
+    const updatedPlanner = group.giftPlanner?.map(item => item.id === itemId ? { ...item, status } : item);
+    await supabase.from("groups").update({ gift_planner: updatedPlanner }).eq("id", groupId);
+    setGroups(prev => prev.map(g => g.id === groupId ? { ...g, giftPlanner: updatedPlanner } : g));
     showToast(`Status updated to ${status}`);
   };
 
   const handleGenerateSmartWish = async (person: Person, vibe: any) => {
     setIsAiLoading(true);
     try {
-      const msg = await generateSmartWish({ 
-        name: person.name, 
+      const wish = await generateSmartWish({
+        name: person.name,
         vibe,
-        interests: person.interests,
-        relationship: person.relationship
+        relationship: person.relationship || "Friend",
+        interests: person.interests || []
       });
-      setCustomWish(msg);
-      setSelectedTemplateId(null);
-    } catch (err) {
-      showToast("AI generation failed", "error");
-    } finally {
-      setIsAiLoading(false);
-    }
+      setCustomWish(wish);
+    } catch (err) { showToast("Failed to generate wish", "error"); }
+    finally { setIsAiLoading(false); }
   };
 
   const handleGenerateGiftIdeas = async (person: Person) => {
     setIsAiLoading(true);
     try {
-      const ideas = await generateGiftIdeas(person.name, person.interests || [], person.relationship);
+      const ideas = await generateGiftIdeas(
+        person.name,
+        person.interests || [],
+        person.relationship || "Friend"
+      );
       setAiGiftIdeas(ideas);
-    } catch (err) {
-      showToast("Failed to get gift ideas", "error");
-    } finally {
-      setIsAiLoading(false);
-    }
+    } catch (err) { showToast("Failed to generate gift ideas", "error"); }
+    finally { setIsAiLoading(false); }
   };
 
-  const handleImport = () => {
-    if (!user || !activeGroupId || userRole !== 'admin') return;
-    const text = importText.trim();
-    if (!text) return;
+  const handleWish = (person: Person) => { setShowWish(person); setCustomWish(""); };
+  const handleCall = (person: Person) => { if (!person.phone) { showToast("No phone number provided", "error"); return; } window.location.href = `tel:${person.phone}`; setShowWish(null); };
+  const handleCopyWish = (person: Person, message?: string) => {
+    const msg = message || `Happy Birthday ${person.name}! Wishing you a year full of joy, health, and success. Have a great one! 🎂✨`;
+    navigator.clipboard.writeText(msg).then(() => { showToast("Wish message copied! 📋"); setShowWish(null); }).catch(() => showToast("Failed to copy wish", "error"));
+  };
+  const handleGroupWish = (person: Person) => {
+    const groupName = activeGroup?.name || "the group";
+    const days = getDaysUntilBirthday(person.dob);
+    const when = days === 0 ? "today" : `on ${MONTHS[getBirthdayMonth(person.dob)]} ${getBirthdayDay(person.dob)}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(`Hey ${groupName}! It's ${person.name}'s birthday ${when}! Don't forget to wish them! 🎂✨`)}`, "_blank");
+  };
+  const handleClearAll = async () => {
+    if (!activeGroupId || userRole !== 'admin') return;
+    if (!window.confirm("Clear all birthdays in this group? This cannot be undone.")) return;
+    await supabase.from("birthdays").delete().eq("group_id", activeGroupId);
+    showToast("Group data cleared");
+  };
 
+  // ── Computed values ──────────────────────────────────────────────────────────
+  const todayBdays = useMemo(() => people.filter(p => getDaysUntilBirthday(p.dob) === 0), [people]);
+  const tomorrowBdays = useMemo(() => people.filter(p => getDaysUntilBirthday(p.dob) === 1), [people]);
+  const weekBdays = useMemo(() => people.filter(p => { const d = getDaysUntilBirthday(p.dob); return d > 0 && d <= 7; }), [people]);
+  const upcomingBdays = useMemo(() => people.filter(p => { const d = getDaysUntilBirthday(p.dob); return d > 0 && d <= 30; }).sort((a,b) => getDaysUntilBirthday(a.dob) - getDaysUntilBirthday(b.dob)), [people]);
+  const sortedPeople = useMemo(() => [...people].sort((a,b) => getDaysUntilBirthday(a.dob) - getDaysUntilBirthday(b.dob)), [people]);
+
+  const filteredPeople = useMemo(() => {
+    let result = [...people];
+    if (searchQuery) result = result.filter(p => p.name.toLowerCase().includes(searchQuery.toLowerCase()) || p.relationship?.toLowerCase().includes(searchQuery.toLowerCase()));
+    if (filter === "today") result = result.filter(p => getDaysUntilBirthday(p.dob) === 0);
+    else if (filter === "week") result = result.filter(p => getDaysUntilBirthday(p.dob) <= 7);
+    else if (filter === "month") result = result.filter(p => getDaysUntilBirthday(p.dob) <= 30);
+    else if (filter === "favorites") result = result.filter(p => p.isFavorite);
+    if (proximityFilter !== "all") result = result.filter(p => p.relationship === proximityFilter);
+    return result.sort((a,b) => getDaysUntilBirthday(a.dob) - getDaysUntilBirthday(b.dob));
+  }, [people, searchQuery, filter, proximityFilter]);
+
+  const monthBdays = useMemo(() => people.filter(p => getBirthdayMonth(p.dob) === monthFilter), [people, monthFilter]);
+  const monthListBdays = monthBdays;
+
+  const handleParseImport = () => {
+    if (!importText.trim()) { showToast("Please paste some contact data first", "error"); return; }
+    const lines = importText.split("\n").filter(l => l.trim());
     let parsed: Person[] = [];
-    const groupName = activeGroup?.name || "General";
-
     if (importMode === "csv") {
-      const lines = text.split("\n").filter(l => l.trim());
-      parsed = lines.map(line => {
-        const parts = line.split(",").map(s => s.trim());
-        if (parts.length >= 2) {
-          const name = parts[0];
-          const dob = parts[1];
-          return {
-            id: Math.random().toString(36).substr(2, 9),
-            name,
-            dob,
-            avatar: name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(),
-            phone: parts[3] || "",
-            group: groupName
-          } as Person;
-        }
-        return null;
+      parsed = lines.slice(1).map(line => {
+        const cols = line.split(",").map(c => c.trim().replace(/^"|"$/g, ""));
+        if (cols.length < 2) return null;
+        const [name, dob, phone, relationship] = cols;
+        if (!name || !dob) return null;
+        return { id: "", name, dob, phone: phone || "", relationship: relationship || "Friend", avatar: name.slice(0,2).toUpperCase(), group: activeGroup?.name || "", createdAt: "", createdBy: "" } as Person;
       }).filter(Boolean) as Person[];
     } else if (importMode === "whatsapp") {
-      // Format: MM/DD/YY, HH:MM - Name: message
-      // We look for messages like "Happy Birthday" or "Birthday" or just extract names from participants
-      const lines = text.split("\n");
-      const contacts = new Map<string, string>(); // Name -> Last Seen Date (as potential DOB)
-      
-      lines.forEach(line => {
-        const match = line.match(/^(\d{1,2}\/\d{1,2}\/\d{2,4}),\s\d{1,2}:\d{2}\s-\s([^:]+):/);
-        if (match) {
-          const date = match[1];
-          const name = match[2].trim();
-          // This is a heuristic: if a message contains "birthday", we might guess the date
-          if (line.toLowerCase().includes("birthday")) {
-            contacts.set(name, date);
-          }
-        }
-      });
-
-      parsed = Array.from(contacts.entries()).map(([name, date]) => {
-        // Try to normalize date to YYYY-MM-DD
-        let dob = "1990-01-01";
-        try {
-          const d = new Date(date);
-          if (!isNaN(d.getTime())) {
-            dob = d.toISOString().split('T')[0];
-          }
-        } catch(e) {}
-
-        return {
-          id: Math.random().toString(36).substr(2, 9),
-          name,
-          dob,
-          avatar: name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(),
-          phone: "",
-          group: groupName
-        } as Person;
-      });
-    } else if (importMode === "facebook") {
-      // ICS format
-      const events = text.split("BEGIN:VEVENT");
-      events.shift(); // remove header
-      parsed = events.map(event => {
-        const summaryMatch = event.match(/SUMMARY:(.*)'s [Bb]irthday/);
-        const dateMatch = event.match(/DTSTART;VALUE=DATE:(\d{8})/);
-        if (summaryMatch && dateMatch) {
-          const name = summaryMatch[1].trim();
-          const rawDate = dateMatch[1]; // YYYYMMDD
-          const dob = `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`;
-          return {
-            id: Math.random().toString(36).substr(2, 9),
-            name,
-            dob,
-            avatar: name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(),
-            phone: "",
-            group: groupName
-          } as Person;
-        }
-        return null;
-      }).filter(Boolean) as Person[];
-    } else if (importMode === "contacts") {
-      // VCF format
-      const cards = text.split("BEGIN:VCARD");
-      cards.shift();
-      parsed = cards.map(card => {
-        const fnMatch = card.match(/FN:(.*)/);
-        const bdayMatch = card.match(/BDAY:(\d{4}-?\d{2}-?\d{2})/);
-        const telMatch = card.match(/TEL;[^:]*:(.*)/);
-        
-        if (fnMatch && bdayMatch) {
-          const name = fnMatch[1].trim();
-          let dob = bdayMatch[1].replace(/-/g, "");
-          if (dob.length === 8) {
-            dob = `${dob.slice(0, 4)}-${dob.slice(4, 6)}-${dob.slice(6, 8)}`;
-          }
-          return {
-            id: Math.random().toString(36).substr(2, 9),
-            name,
-            dob,
-            avatar: name.split(" ").map(n => n[0]).join("").slice(0, 2).toUpperCase(),
-            phone: telMatch ? telMatch[1].trim() : "",
-            group: groupName
-          } as Person;
-        }
-        return null;
+      parsed = lines.map(line => {
+        const nameMatch = line.match(/^([^:]+):/);
+        const dobMatch = line.match(/(\d{4}-\d{2}-\d{2})/);
+        const telMatch = line.match(/(?:Tel|Phone|Mobile):\s*([+\d\s\-()]+)/i);
+        if (!nameMatch || !dobMatch) return null;
+        return { id: "", name: nameMatch[1].trim(), dob: dobMatch[1], phone: telMatch?.[1]?.trim() || "", relationship: "Friend", avatar: nameMatch[1].slice(0,2).toUpperCase(), group: activeGroup?.name || "", createdAt: "", createdBy: "" } as Person;
       }).filter(Boolean) as Person[];
     }
-
-    if (parsed.length === 0) {
-      showToast("No valid contacts found in the provided text", "error");
-    } else {
-      setImportPreview(parsed);
-      setImportStep(2);
-      showToast(`Found ${parsed.length} contacts. Review below.`);
-    }
+    if (parsed.length === 0) { showToast("No valid contacts found", "error"); return; }
+    setImportPreview(parsed);
+    setImportStep(2);
+    showToast(`Found ${parsed.length} contacts. Review below.`);
   };
 
-  const handleConfirmImport = async () => {
-    if (!user || !activeGroupId || userRole !== 'admin' || importPreview.length === 0) return;
-    
-    const batch = writeBatch(db);
-    importPreview.forEach(p => {
-      const personRef = doc(collection(db, "groups", activeGroupId, "birthdays"));
-      batch.set(personRef, {
-        name: p.name,
-        dob: p.dob,
-        avatar: p.avatar,
-        phone: p.phone || "",
-        createdAt: new Date().toISOString(),
-        createdBy: user.uid,
-        group: activeGroup?.name || "General"
-      });
-    });
-
-    try {
-      await batch.commit();
-      setImportText("");
-      setImportPreview([]);
-      setImportStep(3);
-      showToast(`✅ Successfully imported ${importPreview.length} contacts!`);
-    } catch (error) {
-      handleFirestoreError(error, "write" as any, `groups/${activeGroupId}/birthdays`);
-    }
-  };
-
-  const handleCopyLink = (link: string) => {
-    navigator.clipboard?.writeText(link).then(() => {
-      showToast("🔗 Link copied to clipboard!");
-    }).catch(() => {
-      showToast("Failed to copy link", "error");
-    });
-  };
-
-  const handleClearAll = async () => {
-    if (!user || !activeGroupId || userRole !== 'admin') return;
-    if (window.confirm("Are you sure you want to clear all data in this group? This cannot be undone.")) {
-      try {
-        const birthdaysSnap = await getDocs(collection(db, "groups", activeGroupId, "birthdays"));
-        const batch = writeBatch(db);
-        birthdaysSnap.forEach(d => batch.delete(d.ref));
-        await batch.commit();
-        showToast("Group data cleared");
-      } catch (error) {
-        handleFirestoreError(error, "delete" as any, `groups/${activeGroupId}/birthdays`);
-      }
-    }
-  };
-
-  function handleFirestoreError(error: any, operationType: string, path: string) {
-    const errInfo = {
-      error: error.message,
-      operationType,
-      path,
-      authInfo: {
-        userId: user?.uid,
-        email: user?.email
-      }
+  const startVoiceRecognition = (person: Person) => {
+    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) { showToast("Speech recognition not supported", "error"); return; }
+    const SR = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    const recognition = new SR();
+    recognition.lang = 'en-US'; recognition.interimResults = false; recognition.maxAlternatives = 1;
+    recognition.onstart = () => { setIsRecording(true); showToast("Listening... Speak your wish!"); };
+    recognition.onresult = async (event: any) => {
+      const transcript = event.results[0][0].transcript;
+      setIsRecording(false); setIsAiLoading(true);
+      try { const polished = await polishWish(transcript, person.name, person.relationship); setCustomWish(polished); showToast("Wish polished by AI! ✨"); }
+      catch { setCustomWish(transcript); showToast("Couldn't polish wish, using transcript."); }
+      finally { setIsAiLoading(false); }
     };
-    console.error("Firestore Error:", JSON.stringify(errInfo));
-    showToast("Database error occurred", "error");
-  }
+    recognition.onerror = (event: any) => { setIsRecording(false); showToast(`Speech recognition error: ${event.error}`, "error"); };
+    recognition.onend = () => setIsRecording(false);
+    recognition.start();
+  };
 
+  const handleImport = handleParseImport;
+
+  const handleWhatsApp = (person: Person, message?: string) => {
+    const msg = message || `Happy Birthday ${person.name}! Wishing you a year full of joy, health, and success. Have a great one! 🎂✨`;
+    window.open(`https://wa.me/${person.phone.replace(/\D/g, '')}?text=${encodeURIComponent(msg)}`, "_blank");
+    setShowWish(null);
+  };
+
+  const handleShareWeeklySummary = () => {
+    const upcoming = people.filter(p => getDaysUntilBirthday(p.dob) <= 7).sort((a,b) => getDaysUntilBirthday(a.dob) - getDaysUntilBirthday(b.dob));
+    if (!upcoming.length) { showToast("No birthdays this week!", "error"); return; }
+    const msg = `🎂 Birthday Reminders This Week:\n\n${upcoming.map(p => `• ${p.name} - ${getDaysUntilBirthday(p.dob) === 0 ? "Today! 🎉" : `In ${getDaysUntilBirthday(p.dob)} days (${MONTHS[getBirthdayMonth(p.dob)]} ${getBirthdayDay(p.dob)})`}`).join("\n")}\n\nSent via BirthDay Premium 🎁`;
+    navigator.clipboard.writeText(msg).then(() => showToast("Weekly summary copied! 📋"));
+  };
+
+  const handleGroupBroadcast = (groupId: string) => {
+    const group = groups.find(g => g.id === groupId);
+    if (!group) return;
+    const upcoming = people.filter(p => p.group === group.name && getDaysUntilBirthday(p.dob) <= 7);
+    if (!upcoming.length) { showToast("No upcoming birthdays in this group", "error"); return; }
+    const msg = `🎂 Upcoming Birthdays in ${group.name}:\n\n${upcoming.map(p => `• ${p.name} (${MONTHS[getBirthdayMonth(p.dob)]} ${getBirthdayDay(p.dob)})`).join("\n")}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
+  };
   return (
-    <div className="min-h-screen bg-[#0D0C1D] text-[#F0EEE9] font-sans pb-24 selection:bg-indigo-500/30">
-      <div className="fixed inset-0 pointer-events-none overflow-hidden z-0">
-        <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-indigo-600/10 blur-[120px] rounded-full" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-red-500/5 blur-[120px] rounded-full" />
-      </div>
-
-      <Confetti active={confetti} />
-
-      {/* Toast */}
+    <div className={`min-h-screen bg-[#0D0C1D] text-[#F0EEE9] font-sans selection:bg-indigo-500/30 ${theme}`}>
       <AnimatePresence>
         {toast && (
-          <motion.div 
-            initial={{ opacity: 0, y: -20, x: "-50%" }}
-            animate={{ opacity: 1, y: 0, x: "-50%" }}
-            exit={{ opacity: 0, y: -20, x: "-50%" }}
+          <motion.div
+            initial={{ y: -100, opacity: 0 }}
+            animate={{ y: 0, opacity: 1 }}
+            exit={{ y: -100, opacity: 0 }}
             className={`fixed top-6 left-1/2 -translate-x-1/2 px-6 py-3 rounded-full text-sm font-bold z-[10000] shadow-2xl ${toast.type === "error" ? "bg-red-500" : "bg-gradient-to-r from-[#11998E] to-[#38EF7D]"} text-white whitespace-nowrap`}
           >
             {toast.msg}
@@ -2114,7 +1309,7 @@ function BirthdayApp() {
               )}
             </div>
             <div className="flex flex-col">
-              <span className="text-xs font-bold text-white/60 hidden sm:block">{user?.displayName || user?.email?.split('@')[0] || "User"}</span>
+              <span className="text-xs font-bold text-white/60 hidden sm:block">{user?.user_metadata?.full_name || user?.email?.split('@')[0] || "User"}</span>
               {activeGroup && (
                 <span className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider hidden sm:block">
                   {userRole === 'admin' ? 'Admin' : 'Viewer'}
@@ -2771,7 +1966,7 @@ function BirthdayApp() {
 
           {/* ── PROFILE ── */}
           {tab === "profile" && (
-            <ProfileView 
+            <SettingsPanel 
               user={user} 
               userPrefs={userPrefs} 
               setUserPrefs={setUserPrefs} 
@@ -2944,13 +2139,14 @@ function BirthdayApp() {
       </AnimatePresence>
 
       {/* ── MANAGE TEMPLATES MODAL ── */}
-      <ManageTemplatesModal 
-        show={showManageTemplates}
-        onClose={() => setShowManageTemplates(false)}
-        templates={wishTemplates}
-        user={user}
-        showToast={showToast}
-      />
+      {showManageTemplates && (
+        <ManageTemplatesModal 
+          templates={wishTemplates}
+          onAdd={handleAddTemplate}
+          onDelete={handleDeleteTemplate}
+          onClose={() => setShowManageTemplates(false)}
+        />
+      )}
 
       {/* ── ADD PERSON MODAL ── */}
       <AnimatePresence>
@@ -3099,8 +2295,7 @@ function BirthdayApp() {
                         onClick={async () => {
                           const rel = prompt("Update relationship (e.g. Mentor, Sibling):", showPersonDetail.relationship || "Friend");
                           if (rel) {
-                            const personRef = doc(db, "groups", groups.find(g => g.name === showPersonDetail.group)?.id || "", "birthdays", showPersonDetail.id);
-                            await updateDoc(personRef, { relationship: rel });
+                            await supabase.from("birthdays").update({ relationship: rel }).eq("id", showPersonDetail.id);
                             setShowPersonDetail({ ...showPersonDetail, relationship: rel });
                           }
                         }}
@@ -3113,8 +2308,7 @@ function BirthdayApp() {
                 </div>
                 <button 
                   onClick={async () => {
-                    const personRef = doc(db, "groups", groups.find(g => g.name === showPersonDetail.group)?.id || "", "birthdays", showPersonDetail.id);
-                    await updateDoc(personRef, { isFavorite: !showPersonDetail.isFavorite });
+                    await supabase.from("birthdays").update({ is_favorite: !showPersonDetail.isFavorite }).eq("id", showPersonDetail.id);
                     setShowPersonDetail({ ...showPersonDetail, isFavorite: !showPersonDetail.isFavorite });
                   }}
                   className={`p-2 rounded-xl border ${showPersonDetail.isFavorite ? 'bg-yellow-500/10 border-yellow-500/50 text-yellow-500' : 'bg-white/5 border-card-border text-text-main/20'}`}
@@ -3133,8 +2327,7 @@ function BirthdayApp() {
                         const interest = prompt("Enter an interest (e.g. Photography, Pizza, Hiking):");
                         if (interest) {
                           const newInterests = [...(showPersonDetail.interests || []), interest];
-                          const personRef = doc(db, "groups", groups.find(g => g.name === showPersonDetail.group)?.id || "", "birthdays", showPersonDetail.id);
-                          await updateDoc(personRef, { interests: newInterests });
+                          await supabase.from("birthdays").update({ interests: newInterests }).eq("id", showPersonDetail.id);
                           setShowPersonDetail({ ...showPersonDetail, interests: newInterests });
                         }
                       }}
@@ -3150,8 +2343,7 @@ function BirthdayApp() {
                         <button 
                           onClick={async () => {
                             const newInterests = showPersonDetail.interests?.filter((_, idx) => idx !== i) || [];
-                            const personRef = doc(db, "groups", groups.find(g => g.name === showPersonDetail.group)?.id || "", "birthdays", showPersonDetail.id);
-                            await updateDoc(personRef, { interests: newInterests });
+                            await supabase.from("birthdays").update({ interests: newInterests }).eq("id", showPersonDetail.id);
                             setShowPersonDetail({ ...showPersonDetail, interests: newInterests });
                           }}
                           className="opacity-0 group-hover/tag:opacity-100 text-text-main/20 hover:text-red-400 transition-all"
@@ -3169,8 +2361,7 @@ function BirthdayApp() {
                   <textarea 
                     defaultValue={showPersonDetail.notes}
                     onBlur={async (e) => {
-                      const personRef = doc(db, "groups", groups.find(g => g.name === showPersonDetail.group)?.id || "", "birthdays", showPersonDetail.id);
-                      await updateDoc(personRef, { notes: e.target.value });
+                      await supabase.from("birthdays").update({ notes: e.target.value }).eq("id", showPersonDetail.id);
                     }}
                     placeholder="Add notes about gift preferences, favorite cake, etc..."
                     className="w-full h-24 bg-black/30 border border-card-border rounded-2xl px-4 py-3 text-sm text-text-main focus:outline-none focus:ring-2 focus:ring-indigo-500/50 transition-all resize-none"

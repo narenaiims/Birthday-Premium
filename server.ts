@@ -2,172 +2,120 @@ import express from "express";
 import path from "path";
 import { fileURLToPath } from "url";
 import cron from "node-cron";
-import admin from "firebase-admin";
+import { createClient } from "@supabase/supabase-js";
 import fs from "fs";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// ─── Firebase Admin Setup ─────────────────────────────────────────────────────
-let db: admin.firestore.Firestore | null = null;
-let messaging: admin.messaging.Messaging | null = null;
+// ─── Supabase Setup ───────────────────────────────────────────────────────────
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
 
-async function initFirebaseAdmin() {
-  if (admin.apps.length > 0) {
-    db = admin.firestore();
-    messaging = admin.messaging();
-    return;
-  }
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
+// ─── Send Web Push notification ───────────────────────────────────────────────
+async function sendPush(subscription: any, title: string, body: string) {
   try {
-    const configPath = path.join(process.cwd(), "firebase-applet-config.json");
-    let config: any = {};
-    
-    if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
-    }
-
-    const projectId = process.env.FIREBASE_PROJECT_ID || config.projectId;
-    const databaseId = process.env.FIREBASE_DATABASE_ID || config.firestoreDatabaseId;
-    
-    if (!projectId) {
-      console.error("No Firebase Project ID found. Admin SDK will not be initialized.");
-      return;
-    }
-
-    // Use service account if provided in env, else try default
-    const saEnv = process.env.FIREBASE_SERVICE_ACCOUNT;
-    if (saEnv) {
-      let serviceAccount;
-      try {
-        if (saEnv.trim().startsWith("{")) {
-          serviceAccount = JSON.parse(saEnv);
-        } else if (fs.existsSync(saEnv)) {
-          serviceAccount = JSON.parse(fs.readFileSync(saEnv, "utf-8"));
-        }
-      } catch (e) {
-        console.error("Failed to parse FIREBASE_SERVICE_ACCOUNT:", e);
-      }
-
-      if (serviceAccount) {
-        admin.initializeApp({
-          credential: admin.credential.cert(serviceAccount)
-        });
-      } else {
-        console.warn("FIREBASE_SERVICE_ACCOUNT provided but could not be parsed. Falling back to project ID.");
-        admin.initializeApp({ projectId });
-      }
-    } else {
-      // Fallback for local/dev or if Vercel has default credentials
-      admin.initializeApp({ projectId });
-    }
-    
-    db = admin.firestore(databaseId);
-    messaging = admin.messaging();
-    console.log("Firebase Admin initialized successfully.");
-  } catch (error) {
-    console.error("Error initializing Firebase Admin:", error);
+    const payload = JSON.stringify({ title, body, icon: '/icon-192.png' });
+    const res = await fetch(subscription.endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'TTL': '86400' },
+      body: payload,
+    });
+    return res.ok;
+  } catch {
+    return false;
   }
 }
 
 // ─── Birthday Check Logic ─────────────────────────────────────────────────────
 async function checkBirthdays() {
   console.log("Running birthday check...");
-  if (!db || !messaging) {
-    console.warn("Firebase Admin not initialized, skipping birthday check.");
-    return { success: false, message: "Firebase Admin not initialized", sentCount: 0 };
+  if (!supabaseUrl || !supabaseServiceKey) {
+    console.warn("Supabase credentials missing, skipping birthday check.");
+    return { success: false, message: "Supabase credentials missing", sentCount: 0 };
   }
 
   let sentCount = 0;
   try {
     const today = new Date();
-    
-    // Target offsets: 0 (today), 1 (tomorrow), 3 (in 3 days)
     const offsets = [0, 1, 3];
-    const targetDates = offsets.map(offset => {
+    const targetSuffixes = offsets.map(offset => {
       const d = new Date(today);
       d.setDate(d.getDate() + offset);
-      const monthStr = (d.getMonth() + 1).toString().padStart(2, "0");
-      const dayStr = d.getDate().toString().padStart(2, "0");
-      return { offset, suffix: `-${monthStr}-${dayStr}` };
+      const mm = (d.getMonth() + 1).toString().padStart(2, '0');
+      const dd = d.getDate().toString().padStart(2, '0');
+      return { offset, suffix: `-${mm}-${dd}` };
     });
 
-    // 1. Find all birthdays occurring on target dates
-    const birthdaysSnap = await db.collectionGroup("birthdays").get();
-    const matchingBirthdays = birthdaysSnap.docs.map(doc => {
-      const dob = doc.data().dob;
-      const match = targetDates.find(td => dob && dob.endsWith(td.suffix));
-      return match ? { data: doc.data(), offset: match.offset, groupId: doc.ref.parent.parent?.id } : null;
-    }).filter(Boolean) as any[];
+    // Get all birthdays
+    const { data: birthdays, error: bdayErr } = await supabase.from('birthdays').select('id,name,dob,group_id');
+    if (bdayErr || !birthdays?.length) return { success: true, message: 'No birthdays found', sentCount: 0 };
 
-    if (matchingBirthdays.length === 0) {
-      console.log("No matching birthdays found for today or upcoming reminders.");
-      return { success: true, message: "No birthdays found", sentCount: 0 };
+    // Find matching ones
+    const matching = birthdays
+      .map(b => {
+        const match = targetSuffixes.find(t => b.dob?.endsWith(t.suffix));
+        return match ? { ...b, offset: match.offset } : null;
+      })
+      .filter(Boolean) as any[];
+
+    if (!matching.length) return { success: true, message: 'No birthdays today/upcoming', sentCount: 0 };
+
+    // Group by group_id
+    const byGroup: Record<string, Record<number, any[]>> = {};
+    for (const b of matching) {
+      byGroup[b.group_id] ??= {};
+      byGroup[b.group_id][b.offset] ??= [];
+      byGroup[b.group_id][b.offset].push(b);
     }
 
-    // 2. Group matching birthdays by groupId and offset
-    const groupReminders: Record<string, Record<number, any[]>> = {};
-    matchingBirthdays.forEach(b => {
-      if (!b.groupId) return;
-      if (!groupReminders[b.groupId]) groupReminders[b.groupId] = {};
-      if (!groupReminders[b.groupId][b.offset]) groupReminders[b.groupId][b.offset] = [];
-      groupReminders[b.groupId][b.offset].push(b.data);
-    });
+    // For each group, find members and send push
+    for (const [groupId, reminders] of Object.entries(byGroup)) {
+      const { data: groupRow } = await supabase.from('groups').select('name').eq('id', groupId).single();
+      const groupName = groupRow?.name ?? 'Your Group';
 
-    // 3. For each group with reminders, find members and send notifications
-    for (const groupId in groupReminders) {
-      const groupDoc = await db.collection("groups").doc(groupId).get();
-      const groupName = groupDoc.data()?.name || "Shared Group";
-      const reminders = groupReminders[groupId];
+      const { data: members } = await supabase
+        .from('group_members').select('user_id').eq('group_id', groupId);
+      if (!members?.length) continue;
 
-      // Find all members for this group
-      const membersSnap = await db.collection("groups").doc(groupId).collection("members").get();
-      
-      for (const memberDoc of membersSnap.docs) {
-        const memberUid = memberDoc.id;
-        const userDoc = await db.collection("users").doc(memberUid).get();
-        const userData = userDoc.data();
-        const fcmToken = userData?.fcmToken;
+      const userIds = members.map(m => m.user_id);
+      const { data: profiles } = await supabase
+        .from('profiles').select('id,push_subscription,remind_on_day,remind_1_day_before,remind_3_days_before')
+        .in('id', userIds);
+      if (!profiles?.length) continue;
 
-        if (!fcmToken) continue;
+      for (const profile of profiles) {
+        if (!profile.push_subscription) continue;
+        let sub: any;
+        try { sub = JSON.parse(profile.push_subscription); } catch { continue; }
 
-        // Check preferences for each offset
-        for (const offsetStr in reminders) {
+        for (const [offsetStr, bdayList] of Object.entries(reminders as Record<number, any[]>)) {
           const offset = parseInt(offsetStr);
-          const birthdays = reminders[offset];
-          
-          let shouldRemind = false;
-          let title = "";
-          let body = "";
-          const names = birthdays.map(b => b.name).join(", ");
+          const names = bdayList.map((b: any) => b.name).join(', ');
+          let shouldSend = false, title = '', body = '';
 
-          if (offset === 0 && (userData?.remindOnDay !== false)) { // Default to true
-            shouldRemind = true;
-            title = `🎂 Birthday Today: ${groupName}`;
-            body = `Today is the birthday of: ${names}! Don't forget to wish them! 🎉`;
-          } else if (offset === 1 && userData?.remind1DayBefore) {
-            shouldRemind = true;
-            title = `🎁 Birthday Tomorrow: ${groupName}`;
-            body = `Tomorrow is the birthday of: ${names}! Get ready to celebrate! 🎈`;
-          } else if (offset === 3 && userData?.remind3DaysBefore) {
-            shouldRemind = true;
-            title = `🗓️ Birthday in 3 Days: ${groupName}`;
-            body = `${names} will have a birthday in 3 days! Time to plan something special! ✨`;
+          if (offset === 0 && profile.remind_on_day !== false) {
+            shouldSend = true;
+            title = `🎂 Birthday Today! — ${groupName}`;
+            body = `It's ${names}'s birthday! Don't forget to wish them 🎉`;
+          } else if (offset === 1 && profile.remind_1_day_before) {
+            shouldSend = true;
+            title = `🎁 Birthday Tomorrow — ${groupName}`;
+            body = `${names}'s birthday is tomorrow! Get ready 🎈`;
+          } else if (offset === 3 && profile.remind_3_days_before) {
+            shouldSend = true;
+            title = `🗓️ Birthday in 3 Days — ${groupName}`;
+            body = `${names}'s birthday is in 3 days! Time to plan ✨`;
           }
 
-          if (shouldRemind) {
-            const message = {
-              notification: { title, body },
-              token: fcmToken
-            };
-
-            try {
-              await messaging.send(message);
-              sentCount++;
-              console.log(`Sent ${offset}-day reminder to ${memberUid} for ${groupName}`);
-            } catch (err) {
-              console.error(`Failed to send notification to ${memberUid}:`, err);
-            }
+          if (shouldSend) {
+            const ok = await sendPush(sub, title, body);
+            if (ok) sentCount++;
           }
         }
       }
@@ -180,16 +128,14 @@ async function checkBirthdays() {
   }
 }
 
-// ─── Scheduled Job (Daily at 8 AM) ─────────────────────────────────────────────
-cron.schedule("0 8 * * *", async () => {
-  console.log("Running daily birthday check at 8 AM...");
+// ─── Scheduled Job (Daily at 2:30 AM) ──────────────────────────────────────────
+cron.schedule("30 2 * * *", async () => {
+  console.log("Running daily birthday check at 2:30 AM...");
   await checkBirthdays();
 });
 
 // ─── Express Server ───────────────────────────────────────────────────────────
 async function startServer() {
-  await initFirebaseAdmin();
-  
   const app = express();
   const PORT = 3000;
 
@@ -199,6 +145,19 @@ async function startServer() {
   });
 
   // Manual trigger for testing (protected by secret)
+  app.all("/api/trigger-birthday-check", async (req, res) => {
+    const secret = req.headers["x-birthday-secret"] || req.query.secret;
+    const isVercelCron = req.headers["x-vercel-cron"] === "1";
+
+    if (!isVercelCron && process.env.BIRTHDAY_CHECK_SECRET && secret !== process.env.BIRTHDAY_CHECK_SECRET) {
+      return res.status(401).json({ error: "Unauthorized" });
+    }
+    
+    console.log("Triggering birthday check via API...");
+    const result = await checkBirthdays();
+    res.json(result);
+  });
+
   app.post("/api/admin/trigger-birthday-check", async (req, res) => {
     const secret = req.headers["x-birthday-secret"] || req.query.secret;
     if (process.env.BIRTHDAY_CHECK_SECRET && secret !== process.env.BIRTHDAY_CHECK_SECRET) {
@@ -211,7 +170,16 @@ async function startServer() {
   });
 
   if (process.env.NODE_ENV === "production" || process.env.VERCEL) {
-    const distPath = path.join(process.cwd(), "dist");
+    const possiblePaths = [
+      path.join(process.cwd(), "dist"),
+      path.join(__dirname, "dist"),
+      path.join(__dirname, "..", "dist")
+    ];
+    
+    let distPath = possiblePaths.find(p => fs.existsSync(p)) || possiblePaths[0];
+    
+    console.log("Using dist path:", distPath);
+
     if (fs.existsSync(distPath)) {
       app.use(express.static(distPath));
       app.get("*", (req, res) => {
