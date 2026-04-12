@@ -48,6 +48,20 @@ create table if not exists public.groups (
   created_at timestamptz default now()
 );
 alter table public.groups enable row level security;
+
+-- 3. GROUP MEMBERS
+create table if not exists public.group_members (
+  group_id  uuid references public.groups(id) on delete cascade,
+  user_id   uuid references auth.users(id) on delete cascade,
+  role      text not null default 'viewer' check (role in ('admin','viewer')),
+  name      text,
+  email     text,
+  joined_at timestamptz default now(),
+  primary key (group_id, user_id)
+);
+alter table public.group_members enable row level security;
+
+-- Policies for Groups
 create policy "Group members can read"
   on public.groups for select
   using (
@@ -61,17 +75,7 @@ create policy "Owners manage group"
   on public.groups for all
   using (owner_id = auth.uid());
 
--- 3. GROUP MEMBERS
-create table if not exists public.group_members (
-  group_id  uuid references public.groups(id) on delete cascade,
-  user_id   uuid references auth.users(id) on delete cascade,
-  role      text not null default 'viewer' check (role in ('admin','viewer')),
-  name      text,
-  email     text,
-  joined_at timestamptz default now(),
-  primary key (group_id, user_id)
-);
-alter table public.group_members enable row level security;
+-- Policies for Group Members
 create policy "Members see their groups"
   on public.group_members for select
   using (user_id = auth.uid() or exists (
