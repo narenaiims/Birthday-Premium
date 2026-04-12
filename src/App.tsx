@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import confetti from "canvas-confetti";
 import { generateSmartWish, generateGiftIdeas } from "./services/aiService";
+import { Analytics } from "@vercel/analytics/react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 interface Person {
@@ -644,6 +645,7 @@ export default function App() {
           </div>
         )}
       </AnimatePresence>
+      <Analytics />
     </div>
   );
 }
